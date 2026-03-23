@@ -32,14 +32,11 @@ A lightweight email open tracking system with WhatsApp-style read receipts for G
 
 ## 🎬 Demo
 
-### WhatsApp-Style Read Indicators
-![Read indicators in Gmail](https://via.placeholder.com/800x400/34A853/FFFFFF?text=✓✓+Read+Indicators+Demo)
 
-### Chrome Notification
-![Chrome notification](https://via.placeholder.com/400x100/4285F4/FFFFFF?text=bob@test.com+opened+your+email)
 
-### Extension Dashboard
-![Extension popup](https://via.placeholder.com/400x600/EA4335/FFFFFF?text=Extension+Dashboard)
+https://github.com/user-attachments/assets/5470a2ce-9076-407d-8961-1ade0ea8329f
+
+
 
 ---
 
