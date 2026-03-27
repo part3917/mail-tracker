@@ -3,12 +3,84 @@ import { sendWebhookNotifications } from './notifications.js';
 import { renderDetail } from './views/detail.js';
 import { renderDashboard } from './views/dashboard.js';
 
+const SELF_VIEW_WINDOW_MS = 5_000;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS_HEADERS });
+    }
+
+    // POST /self — extension signals sender viewed a thread (batch: multiple pixel IDs)
+    // Called AFTER opens have been recorded, so we retroactively reclassify.
+    if (url.pathname === '/self' && request.method === 'POST') {
+      if (!checkAuth(request, env)) return requireAuthCors();
+
+      let ids;
+      try {
+        const body = await request.json();
+        ids = body.ids;
+        if (!Array.isArray(ids) || ids.length === 0) return json({ error: 'ids must be a non-empty array' }, 400);
+      } catch (e) {
+        return json({ error: 'Invalid JSON body' }, 400);
+      }
+
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      const cutoff = now - SELF_VIEW_WINDOW_MS;
+      const results = [];
+      let totalReclassified = 0;
+
+      for (const id of ids) {
+        const existing = await env.TRACKER.get(id, 'json');
+        if (!existing) {
+          results.push({ id, status: 'not_found' });
+          continue;
+        }
+
+        let reclassified = 0;
+        const keptEvents = [];
+        existing.filteredEvents = existing.filteredEvents || [];
+
+        // Reclassify recent genuine opens as self-view
+        for (const event of existing.events) {
+          const eventTime = new Date(event.time).getTime();
+          if (eventTime >= cutoff) {
+            existing.filteredEvents.push({ ...event, reason: 'self_view', reclassifiedAt: nowIso });
+            reclassified++;
+          } else {
+            keptEvents.push(event);
+          }
+        }
+
+        // Also relabel recent bot_proxy filtered events as self_view
+        // (Gmail's GoogleImageProxy fires when sender opens their own thread)
+        for (const event of existing.filteredEvents) {
+          const eventTime = new Date(event.time).getTime();
+          if (eventTime >= cutoff && event.reason === 'bot_proxy') {
+            event.reason = 'self_view';
+            event.reclassifiedAt = nowIso;
+          }
+        }
+
+        if (reclassified > 0) {
+          existing.events = keptEvents;
+          existing.opens = Math.max(0, existing.opens - reclassified);
+          existing.skipped = (existing.skipped || 0) + reclassified;
+        }
+
+        if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
+        await env.TRACKER.put(id, JSON.stringify(existing));
+        console.log(`[self-view] id=${id} reclassified=${reclassified} opens_now=${existing.opens}`);
+
+        totalReclassified += reclassified;
+        results.push({ id, reclassified, opensNow: existing.opens });
+      }
+
+      console.log(`[self-view] batch: ${ids.length} trackers, ${totalReclassified} total reclassified`);
+      return json({ ok: true, totalReclassified, results });
     }
 
     // GET /t/:id — track pixel open
@@ -23,6 +95,7 @@ export default {
       const country = request.headers.get('cf-ipcountry') || 'unknown';
       const userAgent = request.headers.get('user-agent') || 'unknown';
       const now = new Date().toISOString();
+      const nowMs = new Date(now).getTime();
 
       // Filter 1: Sender IP exclusion
       if (existing.senderIp && existing.senderIp === ip) {
@@ -31,6 +104,7 @@ export default {
         existing.filteredEvents.push({ time: now, ip, reason: 'sender_ip' });
         if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
         await env.TRACKER.put(id, JSON.stringify(existing));
+        console.log(`[open] id=${id} SKIPPED reason=sender_ip ip=${ip}`);
         return servePixel();
       }
 
@@ -41,6 +115,7 @@ export default {
         existing.filteredEvents.push({ time: now, ip, userAgent, reason: 'bot_proxy' });
         if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
         await env.TRACKER.put(id, JSON.stringify(existing));
+        console.log(`[open] id=${id} SKIPPED reason=bot_proxy ua=${userAgent}`);
         return servePixel();
       }
 
@@ -48,26 +123,29 @@ export default {
       const lastEvent = existing.events.length > 0 ? existing.events[existing.events.length - 1] : null;
       if (lastEvent && lastEvent.ip === ip) {
         const lastTime = new Date(lastEvent.time).getTime();
-        if (new Date(now).getTime() - lastTime < DEDUP_WINDOW_MS) return servePixel();
+        if (nowMs - lastTime < DEDUP_WINDOW_MS) {
+          console.log(`[open] id=${id} SKIPPED reason=dedup (${nowMs - lastTime}ms since last)`);
+          return servePixel();
+        }
       }
 
-      // Genuine open
+      // Record the open — extension will retroactively reclassify if it was a self-view
       existing.opens += 1;
       existing.events.push({ time: now, ip, country, userAgent });
       if (existing.events.length > 100) existing.events = existing.events.slice(-100);
       await env.TRACKER.put(id, JSON.stringify(existing));
 
-      // Send webhook notifications
-      const timeStr = new Date(now).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-      const timezone = new Date(now).toLocaleString('en-US', { timeZoneName: 'short' }).split(' ').pop();
+      console.log(`[open] id=${id} RECORDED opens=${existing.opens} ip=${ip} country=${country} ua=${userAgent}`);
 
-      await sendWebhookNotifications(env, {
+      // Queue webhook — cron will send it after self-view window passes
+      const pending = await env.TRACKER.get('__pending_webhooks__', 'json') || [];
+      pending.push({
+        id, time: now, ip, country,
         recipient: existing.recipient,
         subject: existing.subject,
         opens: existing.opens,
-        country, ip,
-        time: `${timeStr} (${timezone})`
       });
+      await env.TRACKER.put('__pending_webhooks__', JSON.stringify(pending));
 
       return servePixel();
     }
@@ -190,5 +268,53 @@ export default {
     }
 
     return new Response('Not found', { status: 404 });
+  },
+
+  async scheduled(event, env) {
+    const pending = await env.TRACKER.get('__pending_webhooks__', 'json');
+    if (!pending || pending.length === 0) return;
+
+    const now = Date.now();
+    const remaining = [];
+
+    for (const item of pending) {
+      const age = now - new Date(item.time).getTime();
+
+      // Wait at least 10s for self-view reclassification to happen
+      if (age < 10_000) {
+        remaining.push(item);
+        continue;
+      }
+
+      // Check if this open is still in events (not reclassified as self-view)
+      const tracker = await env.TRACKER.get(item.id, 'json');
+      if (!tracker) continue;
+
+      const stillExists = tracker.events.some(e => e.time === item.time && e.ip === item.ip);
+      if (!stillExists) {
+        console.log(`[cron] id=${item.id} open was reclassified, skipping webhook`);
+        continue;
+      }
+
+      // Genuine open — send webhook
+      const timeStr = new Date(item.time).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+      const timezone = new Date(item.time).toLocaleString('en-US', { timeZoneName: 'short' }).split(' ').pop();
+
+      await sendWebhookNotifications(env, {
+        recipient: item.recipient,
+        subject: item.subject,
+        opens: tracker.opens,
+        country: item.country,
+        ip: item.ip,
+        time: `${timeStr} (${timezone})`,
+      });
+      console.log(`[cron] id=${item.id} webhook sent for genuine open`);
+    }
+
+    if (remaining.length > 0) {
+      await env.TRACKER.put('__pending_webhooks__', JSON.stringify(remaining));
+    } else {
+      await env.TRACKER.delete('__pending_webhooks__');
+    }
   },
 };

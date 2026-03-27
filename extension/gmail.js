@@ -447,18 +447,113 @@
     });
   }
 
+  // ---- Self-view detection ----
+  // When the sender opens a thread containing tracked pixels, notify the worker
+  // so it can filter out the self-open (Gmail proxy fires /t/:id around the same time)
+
+  const SELF_VIEW_DELAY_MS = 1000;
+
+
+  function isThreadView() {
+    // Gmail thread URLs look like #inbox/FMfcg... or #sent/FMfcg... or #label/FMfcg...
+    const hash = location.hash;
+    // Thread views have a second path segment (the thread ID)
+    const parts = hash.replace('#', '').split('/');
+    return parts.length >= 2 && parts[1].length > 5;
+  }
+
+  // Find tracker pixel IDs directly from <img> tags in the thread DOM
+  // Gmail proxies images like: https://ci3.googleusercontent.com/meips/...#https://mail-tracker.xxx.workers.dev/t/8bdcb976
+  // The actual pixel URL is after the # fragment
+  function findPixelIdsInThread() {
+    const ids = new Set();
+    if (!serverUrl) return [];
+
+    // Extract the host from our server URL to avoid matching other sites' /t/ paths
+    const serverHost = new URL(serverUrl).host;
+
+    document.querySelectorAll('img').forEach(img => {
+      const src = img.src || img.getAttribute('src') || '';
+      // Only match if src contains our server host
+      if (!src.includes(serverHost)) return;
+      const match = src.match(/\/t\/([a-f0-9]{8})\b/);
+      if (match) ids.add(match[1]);
+    });
+
+    // Also check data attributes set during injection (before Gmail proxied them)
+    document.querySelectorAll('img[data-mail-tracker]').forEach(img => {
+      ids.add(img.getAttribute('data-mail-tracker'));
+    });
+
+    return Array.from(ids);
+  }
+
+  async function notifySelfView(ids) {
+    if (!serverUrl || ids.length === 0) return;
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (dashboardPassword) {
+        headers['Authorization'] = 'Basic ' + btoa(':' + dashboardPassword);
+      }
+      console.log(LOG, `[self-view] POST /self — ids:`, ids);
+      const res = await fetch(`${serverUrl}/self`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ids }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        console.log(LOG, '[self-view] response:', JSON.stringify(data));
+      } else {
+        console.warn(LOG, `[self-view] server returned ${res.status}`);
+      }
+    } catch (e) {
+      console.warn(LOG, `[self-view] error:`, e.message);
+    }
+  }
+
+  let selfViewTimer = null;
+
+  async function checkSelfView() {
+    if (!serverUrl || !isThreadView()) return;
+
+    const ids = findPixelIdsInThread();
+    console.log(LOG, `[self-view] found ${ids.length} pixel(s) in thread:`, ids);
+
+    if (ids.length === 0) return;
+
+    // Cancel any existing pending call
+    if (selfViewTimer) {
+      clearTimeout(selfViewTimer);
+      selfViewTimer = null;
+    }
+
+    selfViewTimer = setTimeout(async () => {
+      await notifySelfView(ids);
+      selfViewTimer = null;
+    }, SELF_VIEW_DELAY_MS);
+  }
+
+  function cancelPendingSelfViews() {
+    if (selfViewTimer) {
+      console.log(LOG, '[self-view] cancelling pending self-view call (user left thread)');
+      clearTimeout(selfViewTimer);
+      selfViewTimer = null;
+    }
+  }
+
   // Initialize tracking
   if (window.location.hostname === 'mail.google.com') {
     console.log(LOG, 'Initializing...');
     setupSendInterception();
-    
+
     // Detect view changes and fetch data only when needed
     let lastUrl = location.href;
-    
+
     function handleViewChange() {
       const newView = location.hash;
       console.log(LOG, 'URL changed to:', newView);
-      
+
       // Only process if we're actually changing to sent folder view
       if (newView !== currentView && newView === '#sent') {
         currentView = newView;
@@ -470,13 +565,27 @@
         currentView = newView;
         console.log(LOG, 'Changed to:', currentView, '- not sent folder, skipping');
       }
+
+      // Self-view detection: check if user opened a thread with tracked pixels
+      if (isThreadView()) {
+        console.log(LOG, '[self-view] thread view detected, will check for tracked pixels');
+        // Small delay to let Gmail render the thread content
+        setTimeout(() => checkSelfView(), 800);
+      } else {
+        // User left a thread view — cancel any pending self-view calls
+        cancelPendingSelfViews();
+      }
     }
-    
-    // Initial load - only if already in sent
+
+    // Initial load
     if (location.hash === '#sent') {
       handleViewChange();
     }
-    
+    // Also check if we loaded directly into a thread
+    if (isThreadView()) {
+      setTimeout(() => checkSelfView(), 1500);
+    }
+
     // Watch for URL changes with polling instead of MutationObserver
     setInterval(() => {
       if (location.href !== lastUrl) {

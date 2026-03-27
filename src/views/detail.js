@@ -318,7 +318,7 @@ export function renderDetail(id, data) {
       var timeRow = document.createElement('div'); timeRow.className = 'tl-time'; timeRow.textContent = relativeTime(e.time) + ' ';
       var timeFull = document.createElement('span'); timeFull.className = 'tl-time-full'; timeFull.textContent = '\\u2014 ' + formatTime(e.time); timeRow.appendChild(timeFull);
       var details = document.createElement('div'); details.className = 'tl-details';
-      if (isFiltered) { var rs = document.createElement('span'); rs.className = 'tl-reason'; rs.textContent = e.reason === 'sender_ip' ? 'Self-open' : 'Bot / Proxy'; details.appendChild(rs); }
+      if (isFiltered) { var rs = document.createElement('span'); rs.className = 'tl-reason'; rs.textContent = (e.reason === 'sender_ip' || e.reason === 'self_view') ? 'Self-open' : 'Bot / Proxy'; details.appendChild(rs); }
       else { var ct = document.createElement('span'); ct.className = 'tl-tag'; ct.textContent = e.country || '?'; details.appendChild(ct); }
       var ip = document.createElement('span'); ip.className = 'tl-tag'; ip.textContent = e.ip; details.appendChild(ip);
       content.appendChild(timeRow); content.appendChild(details); item.appendChild(dot); item.appendChild(content); return item;
