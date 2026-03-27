@@ -109,7 +109,7 @@ export default {
       }
 
       // Filter 2: Bot/proxy detection
-      if (isBot(userAgent)) {
+      if (isBot(userAgent, ip)) {
         existing.skipped = (existing.skipped || 0) + 1;
         existing.filteredEvents = existing.filteredEvents || [];
         existing.filteredEvents.push({ time: now, ip, userAgent, reason: 'bot_proxy' });

@@ -44,13 +44,43 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('save-btn').addEventListener('click', saveSettings);
   document.getElementById('delete-btn').addEventListener('click', deleteCurrentPixel);
 
-  // Auto-track toggle
-  const autoToggle = document.getElementById('auto-track-toggle');
-  const { autoTrack } = await chrome.storage.sync.get('autoTrack');
-  autoToggle.checked = autoTrack !== false; // default on
-  autoToggle.addEventListener('change', () => {
-    chrome.storage.sync.set({ autoTrack: autoToggle.checked });
+  // Password visibility toggle
+  const togglePwBtn = document.getElementById('toggle-password');
+  const pwInput = document.getElementById('password-input');
+  function makeEyeSvg(open) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '18');
+    svg.setAttribute('height', '18');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    if (open) {
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z');
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('cx', '12'); c.setAttribute('cy', '12'); c.setAttribute('r', '3');
+      svg.appendChild(p); svg.appendChild(c);
+    } else {
+      const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p1.setAttribute('d', 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94');
+      const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p2.setAttribute('d', 'M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19');
+      const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l.setAttribute('x1', '1'); l.setAttribute('y1', '1'); l.setAttribute('x2', '23'); l.setAttribute('y2', '23');
+      svg.appendChild(p1); svg.appendChild(p2); svg.appendChild(l);
+    }
+    return svg;
+  }
+  togglePwBtn.addEventListener('click', () => {
+    const isPassword = pwInput.type === 'password';
+    pwInput.type = isPassword ? 'text' : 'password';
+    togglePwBtn.replaceChildren(makeEyeSvg(!isPassword));
+    togglePwBtn.title = isPassword ? 'Hide password' : 'Show password';
   });
+
   document.getElementById('snippet-html').addEventListener('click', () => {
     copyToClipboard(document.getElementById('snippet-html').dataset.value);
   });
@@ -102,7 +132,7 @@ async function showSetup(isFirst) {
   setupView.style.display = 'block';
   listView.style.display = 'none';
   detailView.classList.remove('active');
-  document.getElementById('setup-back-btn').style.display = isFirst ? 'none' : 'block';
+  document.getElementById('setup-header').style.display = isFirst ? 'none' : 'flex';
   
   const serverInput = document.getElementById('server-input');
   const passwordInput = document.getElementById('password-input');
@@ -151,9 +181,9 @@ async function showDetail(id) {
   const snippetHtml = document.getElementById('snippet-html');
   const snippetUrl = document.getElementById('snippet-url');
   snippetHtml.dataset.value = htmlSnippet;
-  snippetHtml.firstChild.textContent = htmlSnippet;
+  snippetHtml.textContent = htmlSnippet;
   snippetUrl.dataset.value = pixelUrl;
-  snippetUrl.firstChild.textContent = pixelUrl;
+  snippetUrl.textContent = pixelUrl;
 
   try {
     const data = await api(`/s/${id}`);
@@ -167,32 +197,26 @@ async function showDetail(id) {
       ? timeAgo(data.events[data.events.length - 1].time)
       : 'Never';
 
-    const events = (data.events || []).slice().reverse().slice(0, 20);
+    const recentEvents = (data.events || []).slice().reverse().slice(0, 20);
+    const filteredEvents = (data.filteredEvents || []).slice().reverse().slice(0, 20);
+    const filteredListEl = document.getElementById('filtered-list');
+
     eventsListEl.textContent = '';
+    filteredListEl.textContent = '';
 
-    if (events.length === 0) {
-      const noOpens = document.createElement('div');
-      noOpens.style.cssText = 'color:#444;font-size:12px;';
-      noOpens.textContent = 'No opens yet';
-      eventsListEl.appendChild(noOpens);
-    } else {
-      events.forEach(e => {
-        const item = document.createElement('div');
-        item.className = 'event-item';
+    renderEventList(eventsListEl, recentEvents, false);
+    renderEventList(filteredListEl, filteredEvents, true);
 
-        const timeDiv = document.createElement('div');
-        timeDiv.className = 'event-time';
-        timeDiv.textContent = timeAgo(e.time);
-
-        const detailDiv = document.createElement('div');
-        detailDiv.className = 'event-detail';
-        detailDiv.textContent = `${e.country || '?'} · ${e.ip || '?'} · ${truncate(e.userAgent, 50)}`;
-
-        item.appendChild(timeDiv);
-        item.appendChild(detailDiv);
-        eventsListEl.appendChild(item);
+    // Tab switching
+    document.querySelectorAll('.event-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.event-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const isFiltered = tab.dataset.tab === 'filtered';
+        eventsListEl.style.display = isFiltered ? 'none' : 'block';
+        filteredListEl.style.display = isFiltered ? 'block' : 'none';
       });
-    }
+    });
   } catch (err) {
     eventsListEl.textContent = '';
     const errDiv = document.createElement('div');
@@ -397,4 +421,41 @@ function timeAgo(dateStr) {
 function truncate(str, len) {
   if (!str) return '?';
   return str.length > len ? str.slice(0, len) + '...' : str;
+}
+
+function renderEventList(container, events, isFiltered) {
+  if (events.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:#444;font-size:12px;';
+    empty.textContent = isFiltered ? 'No filtered events' : 'No opens yet';
+    container.appendChild(empty);
+    return;
+  }
+  events.forEach(e => {
+    const item = document.createElement('div');
+    item.className = 'event-item';
+
+    const timeDiv = document.createElement('div');
+    timeDiv.className = 'event-time';
+    timeDiv.textContent = timeAgo(e.time);
+
+    if (isFiltered) {
+      const label = document.createElement('span');
+      const reason = e.reason === 'self_view' || e.reason === 'sender_ip'
+        ? 'Self-open' : 'Bot / Proxy';
+      label.style.cssText = reason === 'Self-open'
+        ? 'color:#fb923c;font-size:10px;margin-left:6px;'
+        : 'color:#ef4444;font-size:10px;margin-left:6px;';
+      label.textContent = reason;
+      timeDiv.appendChild(label);
+    }
+
+    const detailDiv = document.createElement('div');
+    detailDiv.className = 'event-detail';
+    detailDiv.textContent = `${e.country || '?'} · ${e.ip || '?'} · ${truncate(e.userAgent || '', 50)}`;
+
+    item.appendChild(timeDiv);
+    item.appendChild(detailDiv);
+    container.appendChild(item);
+  });
 }

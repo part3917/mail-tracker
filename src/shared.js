@@ -9,6 +9,8 @@ export const CORS_HEADERS = {
 };
 
 export const BOT_PATTERNS = [
+  /GoogleImageProxy/i,
+  /Google-SMTP-STS/i,
   /Yahoo! Slurp/i,
   /Outlook-iOS/i,
   /Microsoft Outlook/i,
@@ -18,6 +20,9 @@ export const BOT_PATTERNS = [
   /YahooMailProxy/i,
   /Thunderbird/i,
 ];
+
+// Google Image Proxy IP ranges (66.249.x.x used by Gmail proxy)
+export const PROXY_IP_PREFIXES = ['66.249.'];
 
 export const DEDUP_WINDOW_MS = 5000;
 
@@ -32,9 +37,10 @@ export function json(data, status = 200) {
   });
 }
 
-export function isBot(userAgent) {
-  if (!userAgent) return false;
-  return BOT_PATTERNS.some(pattern => pattern.test(userAgent));
+export function isBot(userAgent, ip) {
+  if (userAgent && BOT_PATTERNS.some(pattern => pattern.test(userAgent))) return true;
+  if (ip && PROXY_IP_PREFIXES.some(prefix => ip.startsWith(prefix))) return true;
+  return false;
 }
 
 export function checkAuth(request, env) {

@@ -248,7 +248,7 @@ Published mail-tracker (1.2s)
 
 **Save this URL** — you'll enter it in the extension settings.
 
-#### Step 7 — Set Dashboard Password (Recommended)
+#### Step 7 — Set Dashboard Password (Highly Recommended)
 
 Protect your tracking data with a password:
 
