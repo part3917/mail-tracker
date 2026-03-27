@@ -24,7 +24,7 @@ A lightweight email open tracking system with WhatsApp-style read receipts for G
 - **✓✓ WhatsApp-style read indicators** — See ✓ (sent) and ✓✓ (read) next to recipients in Gmail
 - **🔔 Real-time notifications** — Chrome notifications + Slack/Discord webhooks when emails are opened
 - **🛡️ Privacy-first** — Self-hosted on your Cloudflare account, your data stays yours
-- **🤖 Bot filtering** — Automatically excludes Gmail Image Proxy, Outlook SafeLinks, and your own opens
+- **🤖 Smart filtering** — Excludes bot proxies, and automatically detects & filters your own opens via the extension
 - **💰 100% free** — Runs on Cloudflare's generous free tier (100k requests/day)
 - **📊 Detailed analytics** — IP, country, device, timestamp for every open
 
@@ -110,15 +110,26 @@ pnpm exec wrangler secret put DASHBOARD_PASSWORD
 │ Cloudflare Worker logs:     │
 │ • IP, country, device       │
 │ • Timestamp                 │
-│ • Filters bots & self-opens │
+│ • Filters bots & duplicates │
 └──────┬──────────────────────┘
        │
        ▼
 ┌─────────────────────────────┐
-│ You get notified:           │
-│ • Chrome notification       │
-│ • Slack/Discord (optional)  │
-│ • ✓✓ in Gmail sent folder   │
+│ Self-open detection:        │
+│ • Extension detects pixel   │
+│   in thread DOM             │
+│ • Tells worker to reclassify│
+│   open as "self-view"       │
+└──────┬──────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│ Cron (every 1 min) checks:  │
+│ • Open still genuine?       │
+│   → Send Slack/Discord/     │
+│     Chrome notification     │
+│ • Open was self-view?       │
+│   → Skip silently           │
 └─────────────────────────────┘
 ```
 
@@ -274,7 +285,7 @@ Get real-time notifications on Slack or Discord when emails are opened:
 4. Run: `pnpm exec wrangler secret put DISCORD_WEBHOOK_URL`
 5. Paste your webhook URL when prompted
 
-Now you'll get instant notifications with recipient, subject, location, and open count whenever someone opens your tracked emails!
+Notifications are delivered within ~1 minute of a genuine open. Self-opens are automatically filtered out — you'll never get notified for opening your own emails.
 
 ---
 
@@ -365,10 +376,12 @@ For non-Gmail use (other email clients, websites, etc.):
 
 #### Tracking Protection
 
-Your own opens are automatically filtered:
-- **Sender IP exclusion** — when you create a tracker, your IP is stored. If you open your own email, it's not counted.
-- **Bot filtering** — Gmail Image Proxy, Outlook SafeLinks, Yahoo proxy, and other email prefetchers are detected and excluded.
+Your own opens are automatically filtered through multiple layers:
+- **Self-view detection** — When you open a sent email, the extension detects the tracking pixel in the thread DOM and tells the worker to reclassify that open as a self-view. Works regardless of IP, VPN, or network changes.
+- **Sender IP exclusion** — Fallback filter: your IP at pixel creation time is stored. Opens from that IP are filtered.
+- **Bot filtering** — Outlook SafeLinks, Yahoo proxy, and other email prefetchers are detected and excluded.
 - **Dedup window** — duplicate loads within 5 seconds (preview panes, double-loads) are ignored.
+- **Deferred notifications** — Slack/Discord webhooks are queued and only sent after the self-view window passes (~10s), so you never get notified for your own opens.
 
 In the extension, you'll see:
 - **Real Opens** — genuine recipient opens only
@@ -404,6 +417,7 @@ The username is ignored (can be empty). Only the password matters.
 | `GET /t/:id` | ✗ | Tracking endpoint — serves 1x1 PNG and records the open |
 | `GET /s/:id` | ✓ | Stats for a tracker — returns `{ opens, events[], recipient, skipped, filteredEvents[], hasSenderProtection }` |
 | `GET /list` | ✓ | List all pixels — returns `[{ id, opens, skipped, recipient, lastOpen }]` |
+| `POST /self` | ✓ | Self-view signal — extension sends `{ ids: [...] }` to reclassify recent opens as self-views |
 | `GET /d/:id` | ✓ | Delete a tracker — returns `{ deleted: id }` |
 
 ---
@@ -413,15 +427,20 @@ The username is ignored (can be empty). Only the password matters.
 ```
 mail-tracker/
 ├── src/
-│   └── index.js          # Cloudflare Worker (entire backend)
+│   ├── index.js           # Worker entry — router, API handlers, cron
+│   ├── shared.js          # Constants, helpers, auth, pixel serving
+│   ├── notifications.js   # Slack/Discord webhook dispatch
+│   └── views/
+│       ├── dashboard.js   # Main listing page (GET /)
+│       └── detail.js      # Individual tracker page (GET /s/:id)
 ├── extension/
 │   ├── manifest.json      # Chrome extension manifest (v3)
 │   ├── popup.html         # Extension popup UI
 │   ├── popup.js           # Popup logic
 │   ├── background.js      # Service worker (polling & notifications)
-│   ├── gmail.js           # Content script (auto-inject pixel on Gmail Send)
+│   ├── gmail.js           # Content script (auto-inject + self-view detection)
 │   └── icons/             # Extension icons (16/48/128px)
-├── wrangler.toml          # Cloudflare Workers config
+├── wrangler.toml          # Cloudflare Workers config (KV + cron trigger)
 ├── CLAUDE.md              # AI assistant project guide
 ├── package.json
 ├── pnpm-lock.yaml
@@ -449,7 +468,9 @@ This project runs on Cloudflare's **free tier**. For most users, you'll never pa
 | Action | Worker Requests | KV Reads | KV Writes |
 |--------|:-:|:-:|:-:|
 | **Send email** (create tracker) | 1 | 0 | 1 |
-| **Recipient opens email** | 1 | 1 | 1 |
+| **Recipient opens email** | 1 | 1 | 2 (tracker + webhook queue) |
+| **Self-view detected** | 1 | 1 | 1 |
+| **Cron processes webhooks** (every 1 min) | 1 | 1 | 0–1 |
 | **Extension polls /list** (every 60s) | 1 | N (one per tracker) | 0 |
 | **View tracker stats** | 1 | 1 | 0 |
 | **Delete tracker** | 1 | 0 | 0 (1 delete) |
@@ -460,15 +481,15 @@ This project runs on Cloudflare's **free tier**. For most users, you'll never pa
 **Scenario 1: Personal use (free)**
 - Send ~20 tracked emails/day
 - ~50 opens/day
-- Extension polling: ~1,440 requests/day (once per minute)
-- **Total: ~1,510 requests/day, ~70 KV writes/day**
+- Cron trigger: ~1,440 requests/day (once per minute, 0 writes when idle)
+- **Total: ~1,510 requests/day, ~120 KV writes/day**
 - Well within free tier. **Cost: $0/month**
 
 **Scenario 2: Heavy personal use (free)**
 - Send ~100 tracked emails/day
 - ~500 opens/day
 - 200 pixels stored, extension polling reads ~200 keys per poll
-- **Total: ~290,000 KV reads/day, ~600 KV writes/day**
+- **Total: ~290,000 KV reads/day, ~800 KV writes/day**
 - Still within free tier. **Cost: $0/month**
 
 **Scenario 3: Team / power user (paid plan needed)**
@@ -521,7 +542,7 @@ You'd need to track **500,000+ trackers** to approach the 1 GB free storage limi
 - **Images disabled** — if the recipient's email client blocks images by default, the pixel won't load (common in corporate Outlook)
 - **Apple Mail Privacy Protection** (iOS 15+) — pre-fetches all images through Apple's proxy, so you see an open but with Apple's IP, not the recipient's real location
 - **Gmail image caching** — Gmail sometimes caches images after the first load, so subsequent opens from the same person may not trigger
-- **VPN/IP changes** — sender protection is IP-based, so if your IP changes between creating and viewing the email, self-opens might slip through
+- **Extension required for self-open filtering** — self-view detection relies on the Chrome extension detecting the pixel in your Gmail DOM. If you open tracked emails outside Gmail (e.g. forwarded, in another client) without the extension, it may count as a real open
 - **Gmail plain text mode** — if you toggle "Plain text mode" in Gmail's compose menu (three dots → Plain text mode), all HTML is stripped and tracking won't work. This is **off by default** — Gmail always sends HTML, so even a simple "hi" email will include the tracking pixel. Just don't switch to plain text mode.
 - **Plain text emails (other clients)** — if you use a non-Gmail client that sends plain text only, tracking won't work since the `<img>` tag gets stripped
 
