@@ -12,18 +12,74 @@
   style.textContent = `
     .mail-tracker-status {
       display: inline-block;
-      margin-left: 4px;
       font-size: 11px;
       font-weight: bold;
-      cursor: help;
-      opacity: 0.8;
-      transition: opacity 0.2s;
+      cursor: default;
+      opacity: 0.85;
+      transition: opacity 0.15s;
     }
-    .mail-tracker-status:hover {
-      opacity: 1;
+    .mail-tracker-status:hover { opacity: 1; }
+
+    /* 네이티브 title 은 커서가 물음표로 바뀌고 1초 넘게 기다려야 뜬다.
+       올리는 즉시 뜨는 자체 툴팁으로 대체한다. */
+    #mail-tracker-tip {
+      position: fixed;
+      z-index: 2147483647;
+      max-width: 300px;
+      padding: 7px 10px;
+      border-radius: 7px;
+      background: #1f2023;
+      color: #f4f4f5;
+      font: 500 11.5px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      box-shadow: 0 6px 20px rgba(0,0,0,.28);
+      pointer-events: none;
+      white-space: pre-line;
+      opacity: 0;
+      transition: opacity .1s ease;
     }
+    #mail-tracker-tip.visible { opacity: 1; }
   `;
   document.head.appendChild(style);
+
+
+  // ── 즉시 뜨는 툴팁 ──────────────────────────────────────
+  let tipEl = null;
+  function getTip() {
+    if (tipEl && document.body.contains(tipEl)) return tipEl;
+    tipEl = document.createElement('div');
+    tipEl.id = 'mail-tracker-tip';
+    document.body.appendChild(tipEl);
+    return tipEl;
+  }
+
+  function showTip(target, text) {
+    if (!text) return;
+    const tip = getTip();
+    tip.textContent = text;
+    tip.classList.add('visible');
+    const r = target.getBoundingClientRect();
+    const tr = tip.getBoundingClientRect();
+    let left = r.left + r.width / 2 - tr.width / 2;
+    let top = r.top - tr.height - 8;
+    if (top < 6) top = r.bottom + 8;              // 위가 좁으면 아래로
+    left = Math.max(8, Math.min(left, window.innerWidth - tr.width - 8));
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+  }
+
+  function hideTip() {
+    if (tipEl) tipEl.classList.remove('visible');
+  }
+
+  // 위임 — 인디케이터가 계속 새로 그려지므로 개별 바인딩은 새어나간다
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target.closest?.('.mail-tracker-status');
+    if (el) showTip(el, el.dataset.tip || '');
+  }, true);
+  document.addEventListener('mouseout', (e) => {
+    if (e.target.closest?.('.mail-tracker-status')) hideTip();
+  }, true);
+  window.addEventListener('scroll', hideTip, true);
 
   // Cache for tracking data to avoid excessive API calls
   let trackingDataCache = null;
@@ -271,9 +327,10 @@
       // Create status indicator
       const statusEl = document.createElement('span');
       statusEl.className = 'mail-tracker-status';
-      statusEl.style.cssText = 'margin-left: 6px; font-size: 12px; color: #5f6368; cursor: help; font-weight: bold;';
-      statusEl.textContent = '✓'; // Single tick for sent
-      statusEl.title = 'Sent but not opened yet';
+      // 미열람 = 표시 없음. 열렸을 때만 초록 체크 하나를 띄운다.
+      statusEl.style.cssText = 'margin-left: 6px; font-size: 12px; color: #71717a; cursor: help; font-weight: bold;';
+      statusEl.textContent = '\u25cf'; // 회색 채운 점 = 발송됨, 아직 활동 없음
+      statusEl.dataset.tip = 'Sent — no activity recorded yet';
       
       // Insert after the chip
       chip.parentNode.insertBefore(statusEl, chip.nextSibling);
@@ -284,8 +341,8 @@
       const tracker = trackers.find(t => t.recipient === email);
       
       if (tracker && tracker.opens > 0) {
-        statusEl.textContent = '✓✓'; // Double tick for read
-        statusEl.style.color = '#1a73e8'; // Blue for read
+        statusEl.textContent = '\u2713'; // 초록 체크 하나 = 열람됨
+        statusEl.style.color = '#34d399';
         
         const lastOpen = tracker.lastOpen ? new Date(tracker.lastOpen).toLocaleString('en-US', {
           hour: 'numeric',
@@ -295,7 +352,7 @@
           day: 'numeric'
         }) : 'never';
         
-        statusEl.title = `Opened ${tracker.opens} time${tracker.opens > 1 ? 's' : ''}\nLast opened: ${lastOpen}`;
+        statusEl.dataset.tip = `Activity recorded\nLast signal: ${lastOpen}`;
       }
     });
   }
@@ -318,12 +375,106 @@
     await injectTracker(bodyEl, untracked);
   }
 
+
+  // ── 작성창별 추적 on/off ──────────────────────────────────────────
+  // 전역 autoTrack 이 기본값을 정하고, 작성창 버튼이 그 창에 한해 덮어쓴다.
+  // Gmail 은 작성창을 여러 개 띄울 수 있으므로 상태는 폼 엘리먼트에 붙여 둔다.
+  const COMPOSE_STATE = new WeakMap();
+
+  function isTrackingOnFor(form) {
+    if (!form) return trackingEnabled;
+    const v = COMPOSE_STATE.get(form);
+    return v === undefined ? trackingEnabled : v;
+  }
+
+  function setTrackingFor(form, on) {
+    COMPOSE_STATE.set(form, on);
+    const btn = form.querySelector('.mt-compose-toggle');
+    if (btn) paintToggle(btn, on);
+  }
+
+  function paintToggle(btn, on) {
+    btn.setAttribute('aria-pressed', String(on));
+    btn.title = on
+      ? 'Mail Tracker: this email will be tracked. Click to turn off.'
+      : 'Mail Tracker: this email will NOT be tracked. Click to turn on.';
+    btn.style.color = on ? '#0b8457' : '#5f6368';
+    btn.style.borderColor = on ? 'rgba(11,132,87,.35)' : 'rgba(95,99,104,.30)';
+    btn.style.background = on ? 'rgba(11,132,87,.08)' : 'transparent';
+    btn.textContent = on ? '\u25cf Tracking' : '\u25cb Tracking';
+  }
+
+  function ensureComposeToggle(sendBtn) {
+    const form = sendBtn.closest('[role="dialog"]') || sendBtn.closest('.nH');
+    if (!form || form.querySelector('.mt-compose-toggle')) return;
+
+    const btn = document.createElement('div');
+    btn.setAttribute('role', 'button');
+    btn.tabIndex = 0;
+    btn.className = 'mt-compose-toggle';
+    btn.style.cssText = [
+      'display:inline-flex', 'align-items:center', 'gap:5px',
+      'margin:0 4px', 'padding:5px 9px', 'font-size:12px', 'font-weight:600',
+      'line-height:1', 'border-radius:6px', 'border:1px solid', 'cursor:pointer',
+      'font-family:inherit', 'white-space:nowrap', 'user-select:none',
+    ].join(';');
+    paintToggle(btn, isTrackingOnFor(form));
+
+    const flip = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      setTrackingFor(form, !isTrackingOnFor(form));
+    };
+    btn.addEventListener('click', flip, true);
+    btn.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') flip(ev);
+    }, true);
+
+    // ★Send 는 분할 버튼(본체 + 드롭다운)이라 그 사이에 끼우면 UI 가 깨진다.
+    //   작성창 하단 우측 아이콘 툴바에 넣는다. 실패하면 단계적으로 폴백.
+    const footer = sendBtn.closest('.aDh, .btC, table') || form;
+    const discard =
+      footer.querySelector('[role="button"][aria-label*="Discard"], [role="button"][aria-label*="삭제"], .og') ||
+      form.querySelector('[role="button"][aria-label*="Discard"], [role="button"][aria-label*="삭제"], .og');
+
+    if (discard && discard.parentNode) {
+      // 휴지통 바로 앞 = 툴바 오른쪽 끝
+      discard.parentNode.insertBefore(btn, discard);
+      return;
+    }
+
+    // 폴백 1: 서식 아이콘들이 든 툴바 셀
+    const iconBar = footer.querySelector('.gU.a1, .aDj, .btC');
+    if (iconBar) { iconBar.appendChild(btn); return; }
+
+    // 폴백 2: Send 를 감싼 셀 '바깥'에 붙인다 (분할 버튼 내부는 건드리지 않음)
+    const sendCell = sendBtn.closest('td, .dC');
+    if (sendCell && sendCell.parentNode) {
+      sendCell.parentNode.insertBefore(btn, sendCell.nextSibling);
+      return;
+    }
+    form.appendChild(btn);
+  }
+
+  function scanComposeToggles() {
+    document.querySelectorAll(
+      'div[role="button"][aria-label*="Send"], div[role="button"][data-tooltip*="Send"]'
+    ).forEach(ensureComposeToggle);
+  }
+
+  // Gmail 은 DOM 을 수시로 갈아끼우므로 버튼이 사라지면 다시 붙인다
+  function startComposeToggleWatcher() {
+    scanComposeToggles();
+    new MutationObserver(() => scanComposeToggles())
+      .observe(document.body, { childList: true, subtree: true });
+  }
+
   // Watch for Send button clicks — block send, inject pixels, then allow send
   let isSending = false; // Flag to prevent infinite loop
   
   function setupSendInterception() {
     document.addEventListener('click', async (e) => {
-      if (!trackingEnabled || !serverUrl) return;
+      if (!serverUrl) return;
       if (isSending) return; // Skip if already sending
 
       const target = e.target.closest(
@@ -346,7 +497,13 @@
         for (const body of bodies) {
           const form = findComposeForm(body);
           if (!form) continue;
-          
+
+          // 이 작성창에서 추적이 꺼져 있으면 픽셀을 붙이지 않는다
+          if (!isTrackingOnFor(form)) {
+            console.log(LOG, 'Tracking off for this compose — skipping injection');
+            continue;
+          }
+
           const recipients = getRecipients(form);
           const untracked = getUntrackedRecipients(body, recipients);
           
@@ -359,6 +516,10 @@
         }
         
         console.log(LOG, 'All pixels injected, sending email now');
+
+        // 방금 만든 트래커가 목록에 바로 반영되도록 캐시를 버린다
+        trackingDataCache = null;
+        scheduleIndicators(1800);
         
         // Now trigger the actual send
         setTimeout(() => {
@@ -375,6 +536,68 @@
     // No periodic updates - only fetch on view changes
   }
 
+
+  // 목록이 다시 그려지면 인디케이터도 다시 붙인다 (디바운스)
+  // ★Gmail 은 새 tr 을 추가하는 대신 기존 행을 재사용해 내용만 갈아끼운다.
+  //   그래서 "tr 추가"만 감시하면 새로 온/보낸 메일에 표시가 안 붙는다.
+  //   childList 변경 전반을 보되, 우리가 만든 변경은 무시해 루프를 막는다.
+  let indicatorTimer = null;
+  let selfMutating = false;
+
+  function scheduleIndicators(delay) {
+    if (indicatorTimer) clearTimeout(indicatorTimer);
+    indicatorTimer = setTimeout(async () => {
+      indicatorTimer = null;
+      selfMutating = true;
+      try {
+        await addInboxReadIndicators();
+      } finally {
+        // 우리 변경이 관찰자에 되돌아오는 걸 흘려보낸 뒤 잠금 해제
+        setTimeout(() => { selfMutating = false; }, 60);
+      }
+    }, delay || 500);
+  }
+
+  function startIndicatorWatcher() {
+    new MutationObserver((muts) => {
+      if (selfMutating) return;
+      for (const m of muts) {
+        // 우리가 넣은 칸/글리프에서 비롯된 변경은 무시
+        const t = m.target;
+        if (t && t.classList &&
+            (t.classList.contains('mail-tracker-cell') ||
+             t.classList.contains('mail-tracker-status') ||
+             t.id === 'mail-tracker-tip')) continue;
+        if (m.addedNodes.length || m.removedNodes.length) {
+          scheduleIndicators(500);
+          return;
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // 상태 전용 열. 이름 뒤에 붙이면 이름 길이에 따라 위치가 흔들려 세로 스캔이 안 된다.
+  // 발신자 칸(td.yX) 바로 앞에 고정폭 칸을 만든다.
+  // ★추적이 없는 행에도 빈 칸을 넣어야 열이 어긋나지 않는다.
+  function ensureStatusCell(row) {
+    let cell = row.querySelector('td.mail-tracker-cell');
+    if (cell) return cell;
+
+    cell = document.createElement('td');
+    cell.className = 'mail-tracker-cell';
+    cell.style.cssText =
+      'width:28px;min-width:28px;padding:0 7px 0 5px;'
+      + 'text-align:center;vertical-align:middle;line-height:1;white-space:nowrap;';
+
+    const anchor = row.querySelector('td.yX') || row.querySelector('td.xY:nth-of-type(4)');
+    if (anchor && anchor.parentNode) {
+      anchor.parentNode.insertBefore(cell, anchor);
+    } else {
+      row.appendChild(cell);
+    }
+    return cell;
+  }
+
   // Add read indicators to sent emails in inbox view
   async function addInboxReadIndicators() {
     if (!serverUrl || !dashboardPassword) return;
@@ -383,6 +606,7 @@
     
     // First, remove all existing indicators to prevent duplicates
     document.querySelectorAll('.mail-tracker-status').forEach(el => el.remove());
+    // 칸 자체는 유지한다 — 매번 지웠다 만들면 목록이 미세하게 흔들린다
     console.log(LOG, 'Cleared existing indicators');
     
     // Fetch tracking data ONCE before processing emails
@@ -393,6 +617,9 @@
     const sentRows = document.querySelectorAll('tr[role="row"]');
     console.log(LOG, 'Found', sentRows.length, 'email rows');
     
+    // 먼저 모든 행에 빈 칸을 만들어 열 정렬을 맞춘다
+    sentRows.forEach(row => ensureStatusCell(row));
+
     sentRows.forEach((row, index) => {
       const toField = row.querySelector('.yW');
       if (!toField || !toField.textContent.startsWith('To: ')) return;
@@ -421,11 +648,11 @@
       // Create status indicator
       const statusEl = document.createElement('span');
       statusEl.className = 'mail-tracker-status';
-      statusEl.style.cssText = 'margin-left: 6px; font-size: 11px; color: #5f6368; cursor: help; font-weight: bold;';
+      statusEl.style.cssText = 'display:inline-block;margin:0;font-size:12px;line-height:1;cursor:help;font-weight:bold;';
       
       if (tracker.opens > 0) {
-        statusEl.textContent = '✓✓'; // Double tick for read
-        statusEl.style.color = '#1a73e8'; // Blue for read
+        statusEl.textContent = '\u2713'; // 초록 체크 하나 = 열람됨
+        statusEl.style.color = '#34d399';
         
         const lastOpen = tracker.lastOpen ? new Date(tracker.lastOpen).toLocaleString('en-US', {
           hour: 'numeric',
@@ -435,14 +662,18 @@
           day: 'numeric'
         }) : 'never';
         
-        statusEl.title = `Opened ${tracker.opens} time${tracker.opens > 1 ? 's' : ''}\nLast opened: ${lastOpen}`;
+        statusEl.dataset.tip = `Activity recorded\nLast signal: ${lastOpen}`;
       } else {
-        statusEl.textContent = '✓'; // Single tick for sent
-        statusEl.title = 'Sent but not opened yet';
+        statusEl.textContent = '\u25cf'; // 회색 채운 점 = 발송됨, 아직 활동 없음
+        statusEl.style.color = '#71717a';
+        statusEl.dataset.tip = 'Sent — no activity recorded yet';
       }
       
-      // Insert after email span
-      emailSpan.parentNode.insertBefore(statusEl, emailSpan.nextSibling);
+      // 전용 열에 넣는다 (이름 우측이 아니라)
+      statusEl.style.marginLeft = '0';
+      const cell = ensureStatusCell(row);
+      cell.textContent = '';
+      cell.appendChild(statusEl);
       console.log(LOG, 'Added indicator for tracked email:', email);
     });
   }
@@ -546,6 +777,12 @@
   if (window.location.hostname === 'mail.google.com') {
     console.log(LOG, 'Initializing...');
     setupSendInterception();
+    startComposeToggleWatcher();
+
+    // 진입 즉시 1회 — 설정 로드가 비동기라 여유를 준다
+    setTimeout(() => scheduleIndicators(0), 1500);
+    // Gmail 은 목록을 비동기로 갈아끼운다. 행이 새로 그려지면 다시 붙인다.
+    startIndicatorWatcher();
 
     // Detect view changes and fetch data only when needed
     let lastUrl = location.href;
@@ -554,16 +791,14 @@
       const newView = location.hash;
       console.log(LOG, 'URL changed to:', newView);
 
-      // Only process if we're actually changing to sent folder view
-      if (newView !== currentView && newView === '#sent') {
+      // 목록이 있는 화면이면 어디든 표시한다.
+      // 종전엔 '#sent' 로 해시가 '바뀔 때'만 돌아서, 이미 그 화면에 있는 상태로
+      // 확장을 새로고침하면 아무것도 안 그려졌다.
+      if (newView !== currentView) {
         currentView = newView;
-        console.log(LOG, 'Entered sent folder, loading indicators');
-        // Clear cache on view change to force fresh data
+        console.log(LOG, 'View changed to:', currentView, '- refreshing indicators');
         trackingDataCache = null;
-        setTimeout(() => addInboxReadIndicators(), 1000);
-      } else if (newView !== currentView) {
-        currentView = newView;
-        console.log(LOG, 'Changed to:', currentView, '- not sent folder, skipping');
+        scheduleIndicators(600);
       }
 
       // Self-view detection: check if user opened a thread with tracked pixels

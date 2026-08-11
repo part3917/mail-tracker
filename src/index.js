@@ -102,6 +102,25 @@ export default {
       const ip = request.headers.get('cf-connecting-ip') || 'unknown';
       const country = request.headers.get('cf-ipcountry') || 'unknown';
       const userAgent = request.headers.get('user-agent') || 'unknown';
+
+      // Cloudflare 가 무료로 붙여주는 요청 메타데이터. 전부 담는다.
+      // ★프록시 경유(Gmail 등)면 이 값들은 읽은 사람이 아니라 프록시 것이다.
+      //   그래서 저장은 하되, 화면에서는 confidence 와 함께 읽어야 한다.
+      const cf = request.cf || {};
+      const geo = {
+        city: cf.city || null,
+        region: cf.region || null,
+        postalCode: cf.postalCode || null,
+        latitude: cf.latitude || null,
+        longitude: cf.longitude || null,
+        timezone: cf.timezone || null,
+        continent: cf.continent || null,
+        asn: cf.asn || null,
+        asOrganization: cf.asOrganization || null,
+        colo: cf.colo || null,
+        httpProtocol: cf.httpProtocol || null,
+        tlsVersion: cf.tlsVersion || null,
+      };
       const now = new Date().toISOString();
       const nowMs = new Date(now).getTime();
 
@@ -154,7 +173,11 @@ export default {
 
       // Record the open — extension will retroactively reclassify if it was a self-view
       existing.opens += 1;
-      existing.events.push({ time: now, ip, country, userAgent, viaProxy, confidence: viaProxy ? 'proxy' : 'direct' });
+      existing.events.push({
+        time: now, ip, country, userAgent, viaProxy,
+        confidence: viaProxy ? 'proxy' : 'direct',
+        ...geo,
+      });
       if (existing.events.length > 100) existing.events = existing.events.slice(-100);
       await env.TRACKER.put(trackerKey, JSON.stringify(existing));
 

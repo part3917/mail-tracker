@@ -7,9 +7,19 @@ async function getServerUrl() {
   return { serverUrl: serverUrl || '', password: dashboardPassword || '' };
 }
 
+// 알림은 기본 꺼짐. 원하는 사람만 팝업 설정에서 켠다.
+async function notificationsOn() {
+  const { notifyOnOpen } = await chrome.storage.sync.get(['notifyOnOpen']);
+  return notifyOnOpen === true;
+}
+
 async function pollForOpens() {
   const { serverUrl, password } = await getServerUrl();
   if (!serverUrl) return;
+
+  // 꺼져 있으면 폴링 자체를 하지 않는다 — 알림만 막고 요청은 계속 보내면
+  // 서버 부담과 배터리만 쓰게 된다.
+  if (!(await notificationsOn())) return;
 
   try {
     const headers = {};
@@ -35,8 +45,8 @@ async function pollForOpens() {
         chrome.notifications.create(`open-${pixel.id}-${Date.now()}`, {
           type: 'basic',
           iconUrl: 'icons/icon128.png',
-          title: 'Email Opened!',
-          message: `${who} opened your email${diff > 1 ? ` (${diff} times)` : ''} — total: ${pixel.opens}`,
+          title: 'Activity on your email',
+          message: `${who}${diff > 1 ? ` — ${diff} new signals` : ' — new signal'}`,
         });
       }
     }

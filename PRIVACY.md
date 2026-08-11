@@ -1,6 +1,6 @@
 # Privacy Policy — Mail Tracker
 
-**Effective date:** 2026-08-11
+**Effective date:** 2026-08-11 (updated 2026-08-11)
 **Contact:** borelpart@gmail.com
 
 ## What this extension does
@@ -28,12 +28,25 @@ When you send a tracked email, the extension sends the following to your server:
 - Gmail message ID
 - Your IP address at the time of sending (used to exclude your own opens)
 
-When a recipient opens the email, the server records:
+When a recipient opens the email, the server records everything the request
+carries:
 
 - Time of the open
-- IP address and country of the request
+- IP address of the request
+- Approximate location derived from that IP: country, region, city, postal code,
+  latitude and longitude (city-level accuracy, not a precise position), continent,
+  and timezone
+- Network operator: autonomous system number and organisation name (for example,
+  the recipient's internet provider)
 - User-agent string of the requesting client
+- Connection details: HTTP protocol version and TLS version
+- Which Cloudflare data centre served the request
 - Whether the request arrived through a mail provider's image proxy
+
+**Most of this describes the proxy, not the person.** When a recipient reads mail
+in Gmail, the image is fetched by Google's servers, so the recorded IP, location,
+network, and user-agent belong to Google rather than to the reader. Values are
+only about the recipient when the request is marked as a direct load.
 
 **The extension does not read your inbox, does not collect your contacts, and
 does not transmit anything to any third party.** All requests go to the single
