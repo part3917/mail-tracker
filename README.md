@@ -1,3 +1,21 @@
+
+> **Fork notice.** This is a modified fork of
+> [samrathreddy/mail-tracker](https://github.com/samrathreddy/mail-tracker),
+> licensed under AGPL-3.0. Changes in this fork:
+>
+> - **Per-user access tokens replace the shared dashboard password.** Each token
+>   sees only its own records — see [ACCESS_TOKENS.md](ACCESS_TOKENS.md).
+> - **Bot filtering corrected.** The original treated `GoogleImageProxy`,
+>   Outlook, and Thunderbird as bots, which discarded genuine opens from Gmail
+>   and Thunderbird recipients. Proxy traffic is now recorded as a separate
+>   confidence tier instead of being dropped.
+> - **Proxy IP-prefix blocking removed.** Blocking `66.249.` also blocked real
+>   people reading mail on their phones through the same proxy.
+> - **Prefetch window added.** Loads firing within 10 seconds of send are
+>   filtered as machine prefetch (Apple MPP and similar).
+>
+> Privacy policy: [PRIVACY.md](PRIVACY.md)
+
 <div align="center">
   <img src="extension/icons/icon128.png" alt="Mail Tracker Logo" width="128" height="128">
   
@@ -66,11 +84,11 @@ pnpm run deploy
 # Save your worker URL: https://mail-tracker.YOUR-SUBDOMAIN.workers.dev
 ```
 
-**2. Set password (optional but recommended):**
+**2. Register your access token:**
 
 ```bash
-pnpm exec wrangler secret put DASHBOARD_PASSWORD
-# Enter a secure password when prompted
+bash tools/issue-user.sh "Your Name"
+# Prints a token — paste it into the extension
 ```
 
 **3. Install Chrome extension:**
@@ -78,7 +96,7 @@ pnpm exec wrangler secret put DASHBOARD_PASSWORD
 1. Open `chrome://extensions`
 2. Enable **Developer mode** (top-right toggle)
 3. Click **Load unpacked** → select `extension/` folder
-4. Click the extension icon → enter your worker URL and password → **Save & Connect**
+4. Click the extension icon → enter your worker URL and access token → **Save & Connect**
 
 **4. Done!** Send a Gmail email and watch the magic happen ✨
 
@@ -248,15 +266,15 @@ Published mail-tracker (1.2s)
 
 **Save this URL** — you'll enter it in the extension settings.
 
-#### Step 7 — Set Dashboard Password (Highly Recommended)
+#### Step 7 — Issue Your Access Token (Required)
 
-Protect your tracking data with a password:
+Every user needs a token. Issue your own:
 
 ```bash
-pnpm exec wrangler secret put DASHBOARD_PASSWORD
+bash tools/issue-user.sh "Your Name"
 ```
 
-When prompted, enter a secure password. This password will be required to:
+The script prints a 32-character token, which is required to:
 - Access the web dashboard
 - Use the Chrome extension
 - View tracking stats
@@ -323,11 +341,11 @@ Click the **puzzle piece icon** (Extensions) in Chrome's toolbar, then click the
    ```
    https://mail-tracker.YOUR-SUBDOMAIN.workers.dev
    ```
-4. If you set a password in Part 1, Step 7, enter it in the **Dashboard password** field
+4. Enter the token from Part 1, Step 7 in the **Your access token** field
 5. Click **Save & Connect**
 6. If it says "Connected!" — you're done!
 
-**Note:** If you didn't set a password, leave the password field empty.
+**Note:** A registered token is required. Unregistered tokens are rejected with 401.
 
 ---
 
@@ -396,7 +414,7 @@ All endpoints return JSON except `/` (HTML dashboard) and `/t/:id` (serves PNG i
 
 ### Authentication
 
-If you set `DASHBOARD_PASSWORD`, all endpoints except `/t/:id` require HTTP Basic Authentication:
+All endpoints except `/t/:id` require HTTP Basic Authentication. The username is ignored; put your access token in the password field:
 
 ```bash
 # Example with curl

@@ -9,20 +9,32 @@ export const CORS_HEADERS = {
 };
 
 export const BOT_PATTERNS = [
-  /GoogleImageProxy/i,
-  /Google-SMTP-STS/i,
-  /Yahoo! Slurp/i,
-  /Outlook-iOS/i,
-  /Microsoft Outlook/i,
+  // 링크·첨부 스캐너 (사람 아님)
+  /Safelinks/i,
   /ms-office/i,
   /BCLinked/i,
-  /Safelinks/i,
-  /YahooMailProxy/i,
-  /Thunderbird/i,
+  /Google-SMTP-STS/i,
+  /Yahoo! Slurp/i,
+  /SecurityScan/i,
+  /Barracuda/i,
+  /Proofpoint/i,
+  /Mimecast/i,
 ];
 
-// Google Image Proxy IP ranges (66.249.x.x used by Gmail proxy)
-export const PROXY_IP_PREFIXES = ['66.249.'];
+// ★프록시 경유 열람 — 봇이 아니라 "사람일 가능성이 높은 프록시 fetch"로 별도 분류
+// Gmail은 Apple MPP와 달리 배달 시점 프리페치를 하지 않으므로 실제 열람 신호에 가깝다.
+export const PROXY_PATTERNS = [
+  /GoogleImageProxy/i,
+  /ggpht\.com/i,
+  /YahooMailProxy/i,
+];
+
+// 발송 후 이 시간 안에 들어온 요청은 기계로 간주 (Apple MPP 프리페치 차단)
+export const MACHINE_WINDOW_MS = 10_000;
+
+// ★IP로는 봇/사람 구분 불가 — 사람이 폰에서 Gmail을 열어도 같은 프록시 IP를 경유한다.
+// 대역을 막으면 진짜 열람까지 버려지므로 비활성화.
+export const PROXY_IP_PREFIXES = [];
 
 export const DEDUP_WINDOW_MS = 5000;
 
@@ -39,18 +51,58 @@ export function json(data, status = 200) {
 
 export function isBot(userAgent, ip) {
   if (userAgent && BOT_PATTERNS.some(pattern => pattern.test(userAgent))) return true;
-  if (ip && PROXY_IP_PREFIXES.some(prefix => ip.startsWith(prefix))) return true;
   return false;
 }
 
-export function checkAuth(request, env) {
-  if (!env.DASHBOARD_PASSWORD) return true;
+// 프록시 경유 여부 (Gmail/Yahoo 이미지 프록시)
+export function isProxy(userAgent) {
+  return !!(userAgent && PROXY_PATTERNS.some(p => p.test(userAgent)));
+}
+
+// 발송 직후 10초 이내 = Apple MPP 등 기계 프리페치
+export function isTooFast(sentAtMs, nowMs) {
+  if (!sentAtMs) return false;
+  return (nowMs - sentAtMs) < MACHINE_WINDOW_MS;
+}
+
+// ── 멀티테넌트 키 스키마 ────────────────────────────────────────────
+//   t:<id>            → 추적 데이터 (owner 필드 포함). 픽셀이 읽는 실데이터
+//   u:<token>:<id>    → 소유권 색인 (빈 값). /list 는 이 접두어만 스캔
+//   u:<token>:__meta__ → 사용자 등록 레코드 { name, createdAt }
+// ★추적 ID 에는 토큰을 절대 넣지 않는다 — 픽셀 URL 은 메일 본문에 실려
+//   수신자에게 그대로 노출되므로, ID 에 토큰이 있으면 대시보드 열쇠가 새어 나간다.
+export const dataKey = (id) => `t:${id}`;
+export const indexKey = (token, id) => `u:${token}:${id}`;
+export const metaKey = (token) => `u:${token}:__meta__`;
+
+const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
+
+// Basic 인증의 password 자리에 담긴 사용자 토큰을 검증해 반환한다.
+// 등록되지 않은 토큰이면 null → 호출부에서 401.
+export async function getUser(request, env) {
   const authHeader = request.headers.get('Authorization');
-  if (!authHeader || !authHeader.startsWith('Basic ')) return false;
-  const base64 = authHeader.slice(6);
-  const decoded = atob(base64);
-  const [, password] = decoded.split(':');
-  return password === env.DASHBOARD_PASSWORD;
+  if (!authHeader || !authHeader.startsWith('Basic ')) return null;
+  let decoded;
+  try {
+    decoded = atob(authHeader.slice(6));
+  } catch (e) {
+    return null;
+  }
+  const sep = decoded.indexOf(':');
+  const token = sep >= 0 ? decoded.slice(sep + 1) : decoded;
+  if (!TOKEN_RE.test(token)) return null;
+  const meta = await env.TRACKER.get(metaKey(token));
+  return meta ? token : null;
+}
+
+// 추적 데이터 읽기 — 신규 키(t:<id>) 우선, 없으면 구 평면 키로 폴백.
+// 이미 발송된 메일의 픽셀이 깨지지 않도록 한동안 유지한다.
+export async function readTracker(env, id) {
+  const fresh = await env.TRACKER.get(dataKey(id), 'json');
+  if (fresh) return { data: fresh, key: dataKey(id) };
+  const legacy = await env.TRACKER.get(id, 'json');
+  if (legacy) return { data: legacy, key: id };
+  return { data: null, key: dataKey(id) };
 }
 
 export function requireAuth() {

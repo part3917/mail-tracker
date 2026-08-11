@@ -49,11 +49,19 @@ mail-tracker/
 | `/list` | GET | Yes | List all pixels as JSON (used by extension) |
 | `/d/:id` | GET | Yes | Delete a pixel |
 
-Auth uses HTTP Basic with `DASHBOARD_PASSWORD` env var. If unset, all routes are open.
+Auth uses HTTP Basic with a **per-user access token** in the password field. The token is validated against `u:<token>:__meta__` in KV; unregistered tokens get 401. `/t/:id` is unauthenticated by design. See `ACCESS_TOKENS.md`.
 
 ## Storage Schema
 
-Each pixel in KV (key = 8-char UUID):
+Key layout (multi-tenant):
+```
+t:<id>              tracker data (carries `owner`)
+u:<token>:<id>      ownership index — /list scans this prefix only
+u:<token>:__meta__  user registration
+```
+★ The tracking ID never contains the token — pixel URLs are visible to recipients.
+
+Each pixel in KV under `t:<id>`:
 ```json
 {
   "opens": 5,
@@ -111,6 +119,6 @@ Three filters run before recording an open:
 1. Cloudflare account with Workers + KV enabled
 2. Set KV namespace ID in `wrangler.toml`
 3. `pnpm install` then `pnpm run deploy`
-4. Optionally set `DASHBOARD_PASSWORD` secret: `npx wrangler secret put DASHBOARD_PASSWORD`
+4. Issue yourself a token: `bash tools/issue-user.sh "Your Name"`
 5. Optionally set `SLACK_WEBHOOK_URL` / `DISCORD_WEBHOOK_URL` for notifications
 6. Load `extension/` as unpacked extension in Chrome

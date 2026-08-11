@@ -21,7 +21,7 @@ function esc(str) {
 // --- Init ---
 document.addEventListener('DOMContentLoaded', async () => {
   const { serverUrl: saved, dashboardPassword: savedPass, authFailed: savedAuthFailed } = await chrome.storage.sync.get(['serverUrl', 'dashboardPassword', 'authFailed']);
-  serverUrl = saved || '';
+  serverUrl = saved || 'https://track.edword.ai';
   dashboardPassword = savedPass || '';
   authFailed = savedAuthFailed || false;
 

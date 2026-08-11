@@ -1,4 +1,4 @@
-import { CORS_HEADERS, DEDUP_WINDOW_MS, json, isBot, checkAuth, requireAuth, requireAuthCors, servePixel, html } from './shared.js';
+import { CORS_HEADERS, DEDUP_WINDOW_MS, json, isBot, isProxy, isTooFast, getUser, requireAuth, requireAuthCors, servePixel, html, dataKey, indexKey, readTracker } from './shared.js';
 import { sendWebhookNotifications } from './notifications.js';
 import { renderDetail } from './views/detail.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -16,7 +16,8 @@ export default {
     // POST /self — extension signals sender viewed a thread (batch: multiple pixel IDs)
     // Called AFTER opens have been recorded, so we retroactively reclassify.
     if (url.pathname === '/self' && request.method === 'POST') {
-      if (!checkAuth(request, env)) return requireAuthCors();
+      const user = await getUser(request, env);
+      if (!user) return requireAuthCors();
 
       let ids;
       try {
@@ -34,8 +35,15 @@ export default {
       let totalReclassified = 0;
 
       for (const id of ids) {
-        const existing = await env.TRACKER.get(id, 'json');
+        const { data: existing, key } = await readTracker(env, id);
         if (!existing) {
+          results.push({ id, status: 'not_found' });
+          continue;
+        }
+        // ★owner 가 없는 레거시 레코드도 잠근다 — `existing.owner &&` 로 두면
+        //   owner 미보유 레코드가 모든 인증 사용자에게 통과된다.
+        //   또한 존재여부 열거를 막기 위해 not_found 로 통일한다.
+        if (existing.owner !== user) {
           results.push({ id, status: 'not_found' });
           continue;
         }
@@ -72,7 +80,7 @@ export default {
         }
 
         if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
-        await env.TRACKER.put(id, JSON.stringify(existing));
+        await env.TRACKER.put(key, JSON.stringify(existing));
         console.log(`[self-view] id=${id} reclassified=${reclassified} opens_now=${existing.opens}`);
 
         totalReclassified += reclassified;
@@ -88,7 +96,7 @@ export default {
       const id = url.pathname.split('/t/')[1];
       if (!id) return new Response('Missing id', { status: 400 });
 
-      const existing = await env.TRACKER.get(id, 'json');
+      const { data: existing, key: trackerKey } = await readTracker(env, id);
       if (!existing) return servePixel();
 
       const ip = request.headers.get('cf-connecting-ip') || 'unknown';
@@ -103,21 +111,36 @@ export default {
         existing.filteredEvents = existing.filteredEvents || [];
         existing.filteredEvents.push({ time: now, ip, reason: 'sender_ip' });
         if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
-        await env.TRACKER.put(id, JSON.stringify(existing));
+        await env.TRACKER.put(trackerKey, JSON.stringify(existing));
         console.log(`[open] id=${id} SKIPPED reason=sender_ip ip=${ip}`);
         return servePixel();
       }
 
-      // Filter 2: Bot/proxy detection
+      // Filter 2: 스캐너만 제외 (링크·첨부 검사 봇)
       if (isBot(userAgent, ip)) {
         existing.skipped = (existing.skipped || 0) + 1;
         existing.filteredEvents = existing.filteredEvents || [];
-        existing.filteredEvents.push({ time: now, ip, userAgent, reason: 'bot_proxy' });
+        existing.filteredEvents.push({ time: now, ip, userAgent, reason: 'scanner' });
         if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
-        await env.TRACKER.put(id, JSON.stringify(existing));
-        console.log(`[open] id=${id} SKIPPED reason=bot_proxy ua=${userAgent}`);
+        await env.TRACKER.put(trackerKey, JSON.stringify(existing));
+        console.log(`[open] id=${id} SKIPPED reason=scanner ua=${userAgent}`);
         return servePixel();
       }
+
+      // Filter 2b: 발송 후 10초 이내 = Apple MPP 등 기계 프리페치
+      const sentAtMs = existing.sentAt ? new Date(existing.sentAt).getTime() : null;
+      if (isTooFast(sentAtMs, nowMs)) {
+        existing.skipped = (existing.skipped || 0) + 1;
+        existing.filteredEvents = existing.filteredEvents || [];
+        existing.filteredEvents.push({ time: now, ip, userAgent, reason: 'prefetch_too_fast' });
+        if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
+        await env.TRACKER.put(trackerKey, JSON.stringify(existing));
+        console.log(`[open] id=${id} SKIPPED reason=prefetch_too_fast (${nowMs - sentAtMs}ms)`);
+        return servePixel();
+      }
+
+      // 프록시 경유 여부를 등급으로 기록 (제외하지 않음)
+      const viaProxy = isProxy(userAgent);
 
       // Filter 3: Dedup window (same IP within 5s)
       const lastEvent = existing.events.length > 0 ? existing.events[existing.events.length - 1] : null;
@@ -131,9 +154,9 @@ export default {
 
       // Record the open — extension will retroactively reclassify if it was a self-view
       existing.opens += 1;
-      existing.events.push({ time: now, ip, country, userAgent });
+      existing.events.push({ time: now, ip, country, userAgent, viaProxy, confidence: viaProxy ? 'proxy' : 'direct' });
       if (existing.events.length > 100) existing.events = existing.events.slice(-100);
-      await env.TRACKER.put(id, JSON.stringify(existing));
+      await env.TRACKER.put(trackerKey, JSON.stringify(existing));
 
       console.log(`[open] id=${id} RECORDED opens=${existing.opens} ip=${ip} country=${country} ua=${userAgent}`);
 
@@ -152,13 +175,15 @@ export default {
 
     // GET /s/:id — stats for a tracking pixel
     if (url.pathname.startsWith('/s/')) {
-      if (!checkAuth(request, env)) return requireAuth();
+      const user = await getUser(request, env);
+      if (!user) return requireAuth();
 
       const id = url.pathname.split('/s/')[1];
       if (!id) return new Response('Missing id', { status: 400 });
 
-      const data = await env.TRACKER.get(id, 'json');
+      const { data } = await readTracker(env, id);
       if (!data) return new Response('Tracker not found', { status: 404 });
+      if (data.owner !== user) return new Response('Tracker not found', { status: 404 });
 
       const acceptsJson = request.headers.get('accept')?.includes('application/json');
       const formatJson = url.searchParams.get('format') === 'json';
@@ -173,7 +198,8 @@ export default {
 
     // GET/POST /new — create a new tracking pixel
     if (url.pathname === '/new') {
-      if (!checkAuth(request, env)) return requireAuthCors();
+      const user = await getUser(request, env);
+      if (!user) return requireAuthCors();
 
       const id = crypto.randomUUID().slice(0, 8);
       const senderIp = request.headers.get('cf-connecting-ip') || 'unknown';
@@ -197,11 +223,14 @@ export default {
       if (recipient && !recipient.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) return json({ error: 'Invalid email format' }, 400);
       if (subject.length > 500 || bodyPreview.length > 1000) return json({ error: 'Input too long' }, 400);
 
-      await env.TRACKER.put(id, JSON.stringify({
+      await env.TRACKER.put(dataKey(id), JSON.stringify({
+        owner: user,
         opens: 0, events: [], filteredEvents: [], skipped: 0,
         senderIp, recipient, subject, bodyPreview, messageId,
         createdAt: new Date().toISOString(),
       }));
+      // 소유권 색인 — /list 는 이 접두어만 스캔하므로 타인 기록이 섞이지 않는다
+      await env.TRACKER.put(indexKey(user, id), '');
 
       const base = url.origin;
       return json({
@@ -213,14 +242,18 @@ export default {
 
     // GET /list — JSON API for extension
     if (url.pathname === '/list') {
-      if (!checkAuth(request, env)) return requireAuthCors();
+      const user = await getUser(request, env);
+      if (!user) return requireAuthCors();
 
-      const list = await env.TRACKER.list();
+      const prefix = `u:${user}:`;
+      const list = await env.TRACKER.list({ prefix });
       const results = [];
       for (const key of list.keys) {
-        const data = await env.TRACKER.get(key.name, 'json');
+        const id = key.name.slice(prefix.length);
+        if (id === '__meta__') continue;
+        const { data } = await readTracker(env, id);
         results.push({
-          id: key.name, opens: data?.opens || 0, skipped: data?.skipped || 0,
+          id, opens: data?.opens || 0, skipped: data?.skipped || 0,
           recipient: data?.recipient || null, subject: data?.subject || '',
           bodyPreview: data?.bodyPreview || '', messageId: data?.messageId || '',
           lastOpen: data?.events?.length ? data.events[data.events.length - 1].time : null,
@@ -231,23 +264,32 @@ export default {
 
     // GET /d/:id — delete a tracking pixel
     if (url.pathname.startsWith('/d/') && request.method === 'GET') {
-      if (!checkAuth(request, env)) return requireAuth();
+      const user = await getUser(request, env);
+      if (!user) return requireAuth();
       const id = url.pathname.split('/d/')[1];
       if (!id) return json({ error: 'Missing id' }, 400);
-      await env.TRACKER.delete(id);
+      const { data, key } = await readTracker(env, id);
+      if (!data) return json({ error: 'Not found' }, 404);
+      if (data.owner !== user) return json({ error: 'Not found' }, 404);
+      await env.TRACKER.delete(key);
+      await env.TRACKER.delete(indexKey(user, id));
       return json({ deleted: id });
     }
 
     // GET / — dashboard
     if (url.pathname === '/') {
-      if (!checkAuth(request, env)) return requireAuth();
+      const user = await getUser(request, env);
+      if (!user) return requireAuth();
 
-      const list = await env.TRACKER.list();
+      const prefix = `u:${user}:`;
+      const list = await env.TRACKER.list({ prefix });
       const results = [];
       for (const key of list.keys) {
-        const data = await env.TRACKER.get(key.name, 'json');
+        const id = key.name.slice(prefix.length);
+        if (id === '__meta__') continue;
+        const { data } = await readTracker(env, id);
         results.push({
-          id: key.name, email: data?.recipient || key.name,
+          id, email: data?.recipient || id,
           subject: data?.subject || '', bodyPreview: data?.bodyPreview || '',
           opens: data?.opens || 0,
           lastOpen: data?.events?.length ? data.events[data.events.length - 1].time : 'never',
@@ -287,7 +329,7 @@ export default {
       }
 
       // Check if this open is still in events (not reclassified as self-view)
-      const tracker = await env.TRACKER.get(item.id, 'json');
+      const { data: tracker } = await readTracker(env, item.id);
       if (!tracker) continue;
 
       const stillExists = tracker.events.some(e => e.time === item.time && e.ip === item.ip);
