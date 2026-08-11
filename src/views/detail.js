@@ -1,4 +1,5 @@
 import { esc, FAVICON } from '../shared.js';
+import { THEME_LIGHT_CSS, THEME_BUTTON_HTML, THEME_SCRIPT } from './theme.js';
 
 export function renderDetail(id, data) {
   const events = data.events || [];
@@ -28,7 +29,7 @@ export function renderDetail(id, data) {
     --radius: 12px; --radius-sm: 8px;
   }
   body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-  .top-bar { position: sticky; top: 0; z-index: 50; background: rgba(9,9,11,0.8); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 16px; }
+  .top-bar { position: sticky; top: 0; z-index: 50; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 16px; }
   .top-bar a { color: var(--text-2); text-decoration: none; font-size: 0.875rem; transition: color 0.15s; }
   .top-bar a:hover { color: var(--text); }
   .top-bar .sep { color: var(--text-3); }
@@ -104,8 +105,9 @@ export function renderDetail(id, data) {
   .protection-banner { display: flex; align-items: center; gap: 8px; background: var(--green-dim); border: 1px solid rgba(52,211,153,0.2); border-radius: var(--radius-sm); padding: 10px 16px; margin-bottom: 20px; font-size: 0.8rem; color: var(--green); }
   .delete-btn { background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 0.75rem; color: var(--text-3); cursor: pointer; transition: all 0.15s; }
   .delete-btn:hover { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+${THEME_LIGHT_CSS}
 </style></head>
-<body>
+<body>${THEME_BUTTON_HTML}
   <div class="top-bar">
     <a href="/">Mail Tracker</a>
     <span class="sep">/</span>
@@ -332,5 +334,5 @@ export function renderDetail(id, data) {
     if (DATA.filtered.length === 0) { var ef = document.createElement('div'); ef.className = 'empty-state'; var fp = document.createElement('p'); fp.textContent = 'No filtered events'; ef.appendChild(fp); filteredTab.appendChild(ef); }
     else { DATA.filtered.slice().reverse().slice(0, 20).forEach(function(e, i) { filteredTab.appendChild(buildTimelineItem(e, true, i)); }); }
   </script>
-</body></html>`;
+${THEME_SCRIPT}</body></html>`;
 }

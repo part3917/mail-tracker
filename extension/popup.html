@@ -23,6 +23,8 @@
       --caution-bg: rgba(251,191,36,.10);
       --caution-br: rgba(251,191,36,.28);
       --signal-bg:  rgba(52,211,153,.12);
+      --alert-bg:   rgba(248,113,113,.10);
+      --alert-br:   rgba(248,113,113,.30);
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     }
     :root[data-theme="light"] {
@@ -43,6 +45,8 @@
       --caution-bg: rgba(180,83,9,.07);
       --caution-br: rgba(180,83,9,.22);
       --signal-bg:  rgba(5,150,105,.10);
+      --alert-bg:   rgba(220,38,38,.07);
+      --alert-br:   rgba(220,38,38,.24);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -538,6 +542,243 @@
     :root[data-theme="light"] .stat-card .value,
     :root[data-theme="light"] .event-tab.active { color: var(--ink); }
     :root[data-theme="light"] .btn-primary { color: #fff; }
+
+    /* ══ Detail view ════════════════════════════════════════
+       증거를 먼저, 판정은 그 한계와 붙여서. 카드 격자 대신 로그 레일.
+       ⚠ 원본이 `.event-item .event-time`(0,2,0) 같은 선택자를 쓰므로
+       여기서는 클래스 이름 자체를 새로 쓰고(.ev-*), 기존 규칙과 겹치는
+       .event-tab 계열만 (0,3,0) 이상으로 다시 쓴다. */
+
+    /* — Header — */
+    .detail-header { padding: 10px 10px 10px 8px; gap: 6px; }
+    #detail-subject {
+      flex: 1; min-width: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13.5px; font-weight: 600; line-height: 1.3;
+      color: var(--ink); letter-spacing: -0.01em;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #detail-subject.untitled { color: var(--ink-3); font-style: italic; font-weight: 400; }
+    .icon-btn-danger:hover { background: var(--caution-bg); color: var(--alert); }
+
+    /* 식별자·발송 사실은 기계 데이터다. 한 줄 로그로 눕힌다. */
+    .detail-meta {
+      padding: 8px 16px 0;
+      font-family: var(--mono); font-size: 10.5px; line-height: 1.5;
+      color: var(--ink-3); letter-spacing: .01em;
+      word-break: break-word;
+    }
+
+    /* — Reading: 상태 + 그 상태가 말할 수 없는 것 — */
+    .reading {
+      margin: 12px 16px 0;
+      padding: 11px 12px 11px 13px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-left: 2px solid var(--ink-3);
+      border-radius: 9px;
+    }
+    .reading.is-active { border-left-color: var(--signal); }
+    .reading-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    }
+    .reading-state {
+      font-size: 13px; font-weight: 600; letter-spacing: -0.005em;
+      color: var(--ink);
+    }
+    .reading.is-active .reading-state { color: var(--signal); }
+    .reading-when {
+      flex: 0 0 auto;
+      font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    }
+    .reading-note {
+      margin-top: 5px;
+      font-size: 11.5px; line-height: 1.5; color: var(--ink-2);
+    }
+
+    /* — Disclosure rows — */
+    .disclose { margin: 10px 16px 0; }
+    .disclose > summary {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 2px;
+      font-size: 11px; font-weight: 600;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: var(--ink-3);
+      cursor: pointer; list-style: none;
+      transition: color .13s ease;
+    }
+    .disclose > summary::-webkit-details-marker { display: none; }
+    .disclose > summary:hover { color: var(--ink-2); }
+    .disclose > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+    .disclose .chev {
+      width: 13px; height: 13px; flex: 0 0 auto;
+      transition: transform .16s ease;
+    }
+    .disclose[open] > summary .chev { transform: rotate(90deg); }
+    .disclose-body { padding: 2px 0 4px 19px; }
+
+    .limit-list dt {
+      font-size: 11.5px; font-weight: 600; color: var(--ink);
+      margin-top: 8px;
+    }
+    .limit-list dt:first-child { margin-top: 0; }
+    .limit-list dd {
+      font-size: 11px; line-height: 1.55; color: var(--ink-2);
+      margin-top: 2px;
+    }
+
+    /* — Tabs — */
+    .events-section { padding: 14px 16px 16px; }
+    .event-tabs.event-tabs { gap: 2px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+    .event-tabs .event-tab {
+      padding: 6px 10px;
+      font-size: 10.5px; font-weight: 600;
+      letter-spacing: .07em; text-transform: uppercase;
+      color: var(--ink-3);
+      border-bottom: 2px solid transparent;
+      border-radius: 5px 5px 0 0;
+    }
+    .event-tabs .event-tab:hover { color: var(--ink-2); background: var(--surface); }
+    .event-tabs .event-tab.active { color: var(--ink); border-bottom-color: var(--accent); background: transparent; }
+    .event-tabs .event-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .event-tabs .tab-count {
+      margin-left: 5px;
+      font-family: var(--mono); font-weight: 500; letter-spacing: 0;
+      color: var(--ink-3);
+    }
+    .event-tabs .tab-count:empty { display: none; }
+
+    /* — Evidence rail — */
+    .ev-list { position: relative; }
+    .ev {
+      position: relative;
+      padding: 7px 0 7px 18px;
+      border-radius: 7px;
+    }
+    /* 이벤트끼리 이어지는 1px 레일 — 목록이 타임라인으로 읽힌다 */
+    .ev::before {
+      content: ''; position: absolute;
+      left: 4px; top: 0; bottom: 0;
+      width: 1px; background: var(--line);
+    }
+    .ev:first-child::before { top: 13px; }
+    .ev:last-child::before { bottom: auto; height: 13px; }
+    .ev:only-child::before { display: none; }
+    .ev:hover { background: var(--surface); }
+    .ev > summary {
+      display: block; cursor: pointer; list-style: none;
+    }
+    .ev > summary::-webkit-details-marker { display: none; }
+    .ev > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 5px; }
+    .ev-dot {
+      position: absolute; left: 0; top: 11px;
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--surface-2);
+      border: 2px solid var(--ink-3);
+      box-sizing: border-box;
+    }
+    .ev-dot.is-proxy { border-color: var(--caution); }
+    .ev-dot.is-direct { border-color: var(--signal); }
+    .ev-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .ev-time {
+      font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+      color: var(--ink); letter-spacing: .01em;
+    }
+    .ev-badge {
+      flex: 0 0 auto;
+      padding: 1px 6px; border-radius: 999px;
+      font-size: 9px; font-weight: 600; letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--ink-3); background: var(--surface-2);
+    }
+    .ev-badge.is-proxy { color: var(--caution); background: var(--caution-bg); }
+    .ev-badge.is-direct { color: var(--signal); background: var(--signal-bg); }
+    .ev-line {
+      margin-top: 2px;
+      font-family: var(--mono); font-size: 10.5px; line-height: 1.45;
+      color: var(--ink-2); word-break: break-word;
+    }
+    .ev-line.dim { color: var(--ink-3); }
+    .ev-more {
+      display: inline-block; margin-top: 4px;
+      font-size: 9.5px; font-weight: 600;
+      letter-spacing: .07em; text-transform: uppercase;
+      color: var(--ink-3);
+    }
+    .ev:hover .ev-more, .ev[open] .ev-more { color: var(--link); }
+    .ev[open] .ev-more { display: none; }
+
+    .ev-kv {
+      margin-top: 6px; padding: 8px 10px;
+      background: var(--surface-2);
+      border-radius: 7px;
+      display: grid; grid-template-columns: 74px 1fr; gap: 4px 8px;
+    }
+    .ev-kv dt {
+      font-size: 9px; font-weight: 600;
+      letter-spacing: .07em; text-transform: uppercase;
+      color: var(--ink-3); line-height: 1.5; padding-top: 1px;
+    }
+    .ev-kv dd {
+      font-family: var(--mono); font-size: 10px; line-height: 1.5;
+      color: var(--ink-2); word-break: break-word; min-width: 0;
+    }
+
+    .ev-empty {
+      padding: 18px 4px; text-align: left;
+      font-size: 11.5px; line-height: 1.5; color: var(--ink-3);
+    }
+
+    /* — Embed — */
+    .embed { margin-bottom: 14px; }
+    .copy-row {
+      display: flex; align-items: center; gap: 8px;
+      width: 100%; margin-top: 6px; padding: 7px 9px;
+      background: var(--surface);
+      border: 1px solid var(--line); border-radius: 7px;
+      cursor: pointer; text-align: left;
+      transition: border-color .13s ease, background .13s ease;
+    }
+    .copy-row:first-child { margin-top: 0; }
+    .copy-row:hover { border-color: var(--accent); }
+    .copy-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .copy-row-label {
+      flex: 0 0 auto;
+      font-size: 9px; font-weight: 600;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: var(--ink-3);
+    }
+    .copy-row-value {
+      flex: 1; min-width: 0;
+      font-family: var(--mono); font-size: 10px;
+      color: var(--ink-2);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .copy-ico { width: 14px; height: 14px; flex: 0 0 auto; color: var(--ink-3); }
+    .copy-row:hover .copy-ico { color: var(--accent); }
+
+    .detail-error {
+      margin: 4px 0; padding: 10px 12px;
+      background: var(--alert-bg); border: 1px solid var(--alert-br);
+      border-radius: 8px;
+      font-size: 11.5px; line-height: 1.5; color: var(--alert);
+    }
+
+    .lang-opt {
+      flex: 1; padding: 7px 10px; border-radius: 8px;
+      border: 1px solid var(--line); background: transparent;
+      color: var(--ink-2); font-size: 12px; font-weight: 600;
+      cursor: pointer; font-family: inherit;
+      transition: color .13s, border-color .13s, background .13s;
+    }
+    .lang-opt:hover { color: var(--ink); border-color: var(--ink-3); }
+    .lang-opt[aria-pressed="true"] {
+      color: var(--accent); border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .lang-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -558,81 +799,102 @@
             <path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06A1.7 1.7 0 0015 19.4a1.7 1.7 0 00-1 1.55V21a2 2 0 11-4 0v-.09A1.7 1.7 0 009 19.4a1.7 1.7 0 00-1.87.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.7 1.7 0 004.6 15a1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09A1.7 1.7 0 004.6 9a1.7 1.7 0 00-.33-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06A1.7 1.7 0 009 4.6a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09A1.7 1.7 0 0015 4.6a1.7 1.7 0 001.87-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.7 1.7 0 0019.4 9v0a1.7 1.7 0 001.55 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.51 1z"/>
           </svg>
         </button>
-        <button class="btn btn-primary" id="new-btn">+ Manual</button>
+        <button class="btn btn-primary" id="new-btn" data-i18n="ui.manual">+ Manual</button>
       </div>
     </div>
     <div id="pixel-container">
-      <div class="loading"><div class="spinner"></div>Loading...</div>
+      <div class="loading"><div class="spinner"></div data-i18n="common.loading">Loading…</div>
     </div>
   </div>
 
   <!-- Detail View -->
   <div id="detail-view" class="detail">
     <div class="detail-header">
-      <button class="btn btn-ghost" id="back-btn">&#8592;</button>
-      <h2 id="detail-id"></h2>
-      <button class="btn btn-danger" id="delete-btn" title="Delete tracker">&#128465;</button>
+      <button class="icon-btn" id="back-btn" title="Back to list" aria-label="Back to list">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h2 id="detail-subject" data-i18n="common.loading">Loading…</h2>
+      <button class="icon-btn icon-btn-danger" id="delete-btn" title="Delete tracker" aria-label="Delete tracker">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9.5 7V5.2A1.2 1.2 0 0110.7 4h2.6a1.2 1.2 0 011.2 1.2V7M6.5 7l.8 12a1.6 1.6 0 001.6 1.5h6.2a1.6 1.6 0 001.6-1.5l.8-12"/></svg>
+      </button>
     </div>
-    <div class="detail-recipient" id="detail-recipient"></div>
-    <div id="detail-caveat" style="display:none;margin:10px 0 4px;padding:9px 11px;border-radius:8px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.28);color:#fbbf24;font-size:11px;line-height:1.5;"></div>
-    <div class="stat-cards">
-      <div class="stat-card">
-        <label>Status</label>
-        <div class="value green" id="detail-opens" style="font-size:15px;">—</div>
+    <div class="detail-meta" id="detail-meta"></div>
+
+    <!-- 판정과 그 한계를 한 덩어리로. 상태만 따로 읽히는 일이 없게. -->
+    <div class="reading" id="detail-reading">
+      <div class="reading-head">
+        <span class="reading-state" id="detail-state" data-i18n="common.loading">Loading…</span>
+        <span class="reading-when" id="detail-when"></span>
       </div>
-      <div class="stat-card">
-        <label>Last Activity</label>
-        <div class="value" id="detail-last" style="font-size:13px;">—</div>
-      </div>
-      <div class="stat-card">
-        <label>Filtered Out</label>
-        <div class="value orange" id="detail-skipped">0</div>
-      </div>
-      <div class="stat-card">
-        <label>Sender Protection</label>
-        <div class="value blue" id="detail-protection" style="font-size:13px;">—</div>
-      </div>
+      <p class="reading-note" id="detail-note"></p>
     </div>
-    <div class="snippet-section">
-      <div class="snippet-label">HTML Snippet (click to copy)</div>
-      <div class="snippet-box" id="snippet-html"></div>
-    </div>
-    <div class="snippet-section">
-      <div class="snippet-label">Tracking URL (click to copy)</div>
-      <div class="snippet-box" id="snippet-url"></div>
-    </div>
+
+    <details class="disclose limits">
+      <summary>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        <span data-i18n="ui.cant_tell">What this can&#8217;t tell you</span>
+      </summary>
+      <div class="disclose-body">
+        <dl class="limit-list">
+          <dt data-i18n="ui.who_opened">Who opened it</dt>
+          <dd data-i18n="limit.attribution">Every recipient&#8217;s pixel travels inside the same message body, so one person opening the mail fires all of them. In testing, two recipients&#8217; events landed 0.08&#8239;seconds apart.</dd>
+          <dt data-i18n="ui.where_were">Where they were</dt>
+          <dd data-i18n="limit.proxy">A request routed through a mail proxy reports the proxy, not the reader. A message read on a phone in Korea recorded as The Dalles, Oregon.</dd>
+        </dl>
+      </div>
+    </details>
+
     <div class="events-section">
-      <div class="event-tabs">
-        <button class="event-tab active" data-tab="recent">Recent</button>
-        <button class="event-tab" data-tab="filtered">Filtered</button>
+      <div class="event-tabs" role="tablist">
+        <button class="event-tab active" data-tab="recent" role="tab" aria-selected="true" data-i18n="ui.recorded">Recorded</button>
+        <button class="event-tab" data-tab="filtered" role="tab" aria-selected="false" data-i18n="ui.filtered">Filtered<span class="tab-count" id="filtered-count"></span></button>
       </div>
-      <div id="events-list"></div>
-      <div id="filtered-list" style="display:none;"></div>
+      <div id="events-list" class="ev-list"></div>
+      <div id="filtered-list" class="ev-list" style="display:none;"></div>
     </div>
+
+    <details class="disclose embed">
+      <summary>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        <span data-i18n="ui.embed_code">Embed code</span>
+      </summary>
+      <div class="disclose-body">
+        <button type="button" class="copy-row" id="snippet-html">
+          <span class="copy-row-label">HTML</span>
+          <code class="copy-row-value"></code>
+          <svg class="copy-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4.5A1.5 1.5 0 013 13.5v-9A1.5 1.5 0 014.5 3h9A1.5 1.5 0 0115 4.5V5"/></svg>
+        </button>
+        <button type="button" class="copy-row" id="snippet-url">
+          <span class="copy-row-label">URL</span>
+          <code class="copy-row-value"></code>
+          <svg class="copy-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4.5A1.5 1.5 0 013 13.5v-9A1.5 1.5 0 014.5 3h9A1.5 1.5 0 0115 4.5V5"/></svg>
+        </button>
+      </div>
+    </details>
   </div>
 
   <!-- Setup View -->
   <div id="setup-view" style="display:none;">
     <div class="header" id="setup-header" style="display:none;">
-      <h1>&#9881; Settings</h1>
+      <h1 data-i18n="settings.title">Settings</h1>
       <button class="btn btn-ghost" id="setup-back-btn">&#8592;</button>
     </div>
     <div class="setup">
-      <p>Enter your Mail Tracker server URL (your Cloudflare Worker URL)</p>
-      <input type="url" id="server-input" placeholder="https://track.edword.ai" />
+      <p data-i18n="ui.server_hint">Enter your Mail Tracker server URL (your Cloudflare Worker URL)</p>
+      <input type="url" id="server-input" placeholder="https://track.edword.ai" data-i18n-ph="settings.server" />
       <div style="position:relative;">
-        <input type="password" id="password-input" placeholder="Your access token" style="padding-right:36px;" />
+        <input type="password" id="password-input" placeholder="Your access token" data-i18n-ph="settings.token" style="padding-right:36px;" />
         <button type="button" id="toggle-password" style="position:absolute;right:8px;top:40%;transform:translateY(-50%);background:none;border:none;color:#555;cursor:pointer;padding:4px;line-height:0;" title="Show token"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
       </div>
-      <button class="btn btn-primary" id="save-btn">Save & Connect</button>
+      <button class="btn btn-primary" id="save-btn" data-i18n="settings.save">Save & Connect</button>
       <p id="setup-error" style="color:#ef4444;margin-top:12px;display:none;"></p>
 
       <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line);">
         <label for="autotrack-input" style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
           <input type="checkbox" id="autotrack-input" style="margin-top:2px;flex:0 0 auto;width:16px;height:16px;accent-color:#6366f1;cursor:pointer;" />
           <span style="flex:1;">
-            <span style="display:block;color:#fafafa;font-size:13px;font-weight:600;">Track new emails automatically</span>
-            <span style="display:block;color:#71717a;font-size:11px;margin-top:3px;line-height:1.45;">
+            <span style="display:block;color:#fafafa;font-size:13px;font-weight:600;" data-i18n="settings.autotrack">Track new emails automatically</span>
+            <span style="display:block;color:#71717a;font-size:11px;margin-top:3px;line-height:1.45;" data-i18n="settings.autotrack_sub">
               Sets the default for every compose window. Turn it off to track only
               the emails you choose. You can always flip it per email with the
               Tracking button next to Send.
@@ -643,13 +905,29 @@
         <label for="notify-input" style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-top:14px;">
           <input type="checkbox" id="notify-input" style="margin-top:2px;flex:0 0 auto;width:16px;height:16px;accent-color:var(--accent);cursor:pointer;" />
           <span style="flex:1;">
-            <span style="display:block;color:var(--ink);font-size:13px;font-weight:600;">Show a Chrome notification on new activity</span>
-            <span style="display:block;color:var(--ink-3);font-size:11px;margin-top:3px;line-height:1.45;">
+            <span style="display:block;color:var(--ink);font-size:13px;font-weight:600;" data-i18n="settings.notify">Show a Chrome notification on new activity</span>
+            <span style="display:block;color:var(--ink-3);font-size:11px;margin-top:3px;line-height:1.45;" data-i18n="settings.notify_sub">
               Off by default. When on, the extension checks for new activity every
               five minutes and notifies you.
             </span>
           </span>
         </label>
+
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);">
+          <div style="color:var(--ink);font-size:13px;font-weight:600;" data-i18n="settings.language">Language</div>
+          <div style="color:var(--ink-3);font-size:11px;margin-top:3px;line-height:1.45;" data-i18n="settings.language_sub">
+            Applies everywhere right away, including the labels inside Gmail.
+          </div>
+          <div id="lang-seg" style="display:flex;gap:6px;margin-top:9px;">
+            <button type="button" class="lang-opt" data-lang="en">English</button>
+            <button type="button" class="lang-opt" data-lang="ko">한국어</button>
+          </div>
+          <div id="lang-note" style="display:none;margin-top:9px;padding:8px 10px;border-radius:7px;
+               background:var(--caution-bg);border:1px solid var(--caution-br);color:var(--caution);
+               font-size:11px;line-height:1.5;" data-i18n="common.refresh_needed">
+            Reload Gmail to apply the new language.
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -657,6 +935,7 @@
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 
+  <script src="i18n.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

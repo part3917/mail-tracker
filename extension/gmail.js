@@ -89,6 +89,14 @@
 
   // Get tracking data with caching
   async function getTrackingData() {
+    // ★설정 로드가 비동기라 serverUrl 이 아직 빈 순간이 있다.
+    //   그대로 fetch 하면 mail.google.com/list 로 나가 CORS 로 막히고
+    //   'Failed to fetch' 로 보인다.
+    if (!serverUrl) {
+      console.log(LOG, 'getTrackingData skipped — settings not loaded yet');
+      return [];
+    }
+
     const now = Date.now();
     
     console.log(LOG, 'getTrackingData called - cache age:', now - lastCacheUpdate, 'ms');
@@ -110,7 +118,8 @@
       console.log(LOG, 'Making /list API call');
       const res = await fetch(`${serverUrl}/list`, { headers });
       if (res.ok) {
-        trackingDataCache = await res.json();
+        const raw = await res.json();
+        trackingDataCache = Array.isArray(raw) ? raw : (raw.items || []);
         lastCacheUpdate = now;
         console.log(LOG, 'API call successful, cached', trackingDataCache.length, 'trackers');
         return trackingDataCache;
@@ -124,12 +133,29 @@
     }
   }
 
+  // ── i18n ──
+  const T = (k, v) => (window.MTI18N ? window.MTI18N.t(k, v) : k);
+  if (window.MTI18N) window.MTI18N.init(() => {});
+  chrome.storage.onChanged.addListener((c) => {
+    if (!c.lang || !window.MTI18N) return;
+    window.MTI18N.setLang(c.lang.newValue);
+    // 이미 그려둔 것들을 걷어내고 다시 그린다 — 새로고침을 요구하지 않기 위해.
+    document.querySelectorAll('.mt-compose-toggle, .mt-activity-btn, .mt-activity-panel')
+      .forEach((el) => el.remove());
+    hideTip();
+    scanComposeToggles();
+    trackingDataCache = null;
+    scheduleIndicators(0);
+  });
+
   // Load settings
   chrome.storage.sync.get(['serverUrl', 'autoTrack', 'dashboardPassword'], (result) => {
     serverUrl = result.serverUrl || '';
     dashboardPassword = result.dashboardPassword || '';
     trackingEnabled = result.autoTrack !== false;
     console.log(LOG, 'Loaded settings:', { serverUrl: serverUrl ? 'set' : 'empty', trackingEnabled });
+    // 설정이 들어온 뒤에 한 번 그린다 — 진입 타이머와의 경합을 없앤다
+    if (serverUrl) { trackingDataCache = null; scheduleIndicators(200); }
   });
 
   chrome.storage.onChanged.addListener((changes) => {
@@ -312,6 +338,7 @@
     return null;
   }
   function addReadIndicators(composeForm) {
+    if (!serverUrl) return;
     console.log(LOG, 'Adding read indicators...');
     
     // Find all recipient chips in the compose form
@@ -330,7 +357,7 @@
       // 미열람 = 표시 없음. 열렸을 때만 초록 체크 하나를 띄운다.
       statusEl.style.cssText = 'margin-left: 6px; font-size: 12px; color: #71717a; cursor: help; font-weight: bold;';
       statusEl.textContent = '\u25cf'; // 회색 채운 점 = 발송됨, 아직 활동 없음
-      statusEl.dataset.tip = 'Sent — no activity recorded yet';
+      statusEl.dataset.tip = T('gmail.sent_no_activity');
       
       // Insert after the chip
       chip.parentNode.insertBefore(statusEl, chip.nextSibling);
@@ -352,7 +379,7 @@
           day: 'numeric'
         }) : 'never';
         
-        statusEl.dataset.tip = `Activity recorded\nLast signal: ${lastOpen}`;
+        statusEl.dataset.tip = T('gmail.activity_recorded') + '\n' + T('gmail.last_signal', { t: lastOpen });
       }
     });
   }
@@ -395,13 +422,11 @@
 
   function paintToggle(btn, on) {
     btn.setAttribute('aria-pressed', String(on));
-    btn.title = on
-      ? 'Mail Tracker: this email will be tracked. Click to turn off.'
-      : 'Mail Tracker: this email will NOT be tracked. Click to turn on.';
+    btn.title = on ? T('gmail.tracking_on_title') : T('gmail.tracking_off_title');
     btn.style.color = on ? '#0b8457' : '#5f6368';
     btn.style.borderColor = on ? 'rgba(11,132,87,.35)' : 'rgba(95,99,104,.30)';
     btn.style.background = on ? 'rgba(11,132,87,.08)' : 'transparent';
-    btn.textContent = on ? '\u25cf Tracking' : '\u25cb Tracking';
+    btn.textContent = (on ? '\u25cf ' : '\u25cb ') + T(on ? 'gmail.tracking_on' : 'gmail.tracking_off');
   }
 
   function ensureComposeToggle(sendBtn) {
@@ -551,6 +576,7 @@
       selfMutating = true;
       try {
         await addInboxReadIndicators();
+        ensureThreadActivityButton();
       } finally {
         // 우리 변경이 관찰자에 되돌아오는 걸 흘려보낸 뒤 잠금 해제
         setTimeout(() => { selfMutating = false; }, 60);
@@ -576,6 +602,169 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
 
+
+  // ── 스레드 액티비티 패널 ────────────────────────────────
+  // 메일을 열었을 때 툴바 버튼으로 켜고 끈다. 기본은 꺼짐 — 볼 때만 본다.
+  function describeClientG(ua) {
+    const u = ua || '';
+    if (/GoogleImageProxy|ggpht\.com/i.test(u)) return 'Gmail (image proxy)';
+    if (/YahooMailProxy/i.test(u)) return 'Yahoo Mail (proxy)';
+    if (/Safelinks|ms-office/i.test(u)) return 'Outlook link scanner';
+    if (/Barracuda|Proofpoint|Mimecast|SecurityScan/i.test(u)) return 'Security scanner';
+    if (/iPhone|iPad/i.test(u)) return 'iPhone / iPad';
+    if (/Android/i.test(u)) return 'Android';
+    if (/Thunderbird/i.test(u)) return 'Thunderbird';
+    if (/Macintosh|Mac OS X/i.test(u)) return 'Mac';
+    if (/Windows/i.test(u)) return 'Windows';
+    return u ? u.slice(0, 40) : 'Unknown client';
+  }
+
+  function fmtWhen(iso) {
+    const d = new Date(iso);
+    const diff = Date.now() - d.getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  async function fetchStats(id) {
+    const headers = { 'Accept': 'application/json' };
+    if (dashboardPassword) headers['Authorization'] = 'Basic ' + btoa(':' + dashboardPassword);
+    const res = await fetch(`${serverUrl}/s/${id}?format=json`, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function renderActivityPanel(panel, datasets) {
+    panel.textContent = '';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;font-size:12px;margin-bottom:8px;color:#202124;';
+    title.textContent = T('gmail.activity_heading');
+    panel.appendChild(title);
+
+    let any = false;
+    datasets.forEach((d) => {
+      const events = d.events || [];
+      const head = document.createElement('div');
+      head.style.cssText = 'font-size:11px;color:#5f6368;margin:8px 0 4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;';
+      head.textContent = d.recipient || d.id;
+      panel.appendChild(head);
+
+      if (!events.length) {
+        const none = document.createElement('div');
+        none.style.cssText = 'font-size:11px;color:#80868b;padding:2px 0 4px;';
+        none.textContent = T('gmail.no_activity');
+        panel.appendChild(none);
+        return;
+      }
+      any = true;
+      events.slice().reverse().slice(0, 12).forEach((e) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'font-size:11px;line-height:1.5;padding:3px 0;border-top:1px solid #f1f3f4;';
+        const proxy = e.viaProxy || e.confidence === 'proxy';
+        const place = [e.city, e.region, e.country].filter(Boolean).join(', ') || (e.country || '?');
+        const badge = T(proxy ? 'event.via_proxy' : 'event.direct');
+        const color = proxy ? '#b45309' : '#0b8457';
+        row.innerHTML = '';
+        const t = document.createElement('span');
+        t.style.cssText = 'font-weight:600;color:#202124;';
+        t.textContent = fmtWhen(e.time);
+        const b = document.createElement('span');
+        b.style.cssText = `margin-left:6px;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:600;color:${color};background:${proxy ? 'rgba(180,83,9,.10)' : 'rgba(11,132,87,.10)'};`;
+        b.textContent = badge;
+        const sub = document.createElement('div');
+        sub.style.cssText = 'color:#5f6368;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;';
+        sub.textContent = `${place} · ${e.ip || '?'} · ${describeClientG(e.userAgent)}`;
+        row.appendChild(t); row.appendChild(b); row.appendChild(sub);
+        panel.appendChild(row);
+      });
+    });
+
+    if (any) {
+      const note = document.createElement('div');
+      note.style.cssText = 'margin-top:10px;padding:7px 9px;border-radius:6px;background:rgba(180,83,9,.07);border:1px solid rgba(180,83,9,.2);color:#b45309;font-size:10.5px;line-height:1.5;';
+      note.textContent = T('gmail.panel_note');
+      panel.appendChild(note);
+    }
+  }
+
+  function ensureThreadActivityButton() {
+    if (!isThreadView() || !serverUrl) return;
+    const ids = findPixelIdsInThread();
+    if (!ids.length) return;
+
+    const star = document.querySelector(
+      '[role="main"] [aria-label*="Star"], [role="main"] [data-tooltip*="Star"], [role="main"] .T-KT'
+    );
+    if (!star) return;
+
+    // 별 바로 앞, 아이콘 묶음 '안'에 넣는다.
+    // 셀 구조면 같은 형태의 셀을 만들어 끼워야 정렬이 안 깨진다.
+    const starCell = star.closest('td');
+    const host = starCell ? starCell.parentElement : star.parentElement;
+    if (!host || host.querySelector('.mt-activity-btn')) return;
+
+    const btn = document.createElement('span');
+    btn.className = 'mt-activity-btn';
+    btn.setAttribute('role', 'button');
+    btn.tabIndex = 0;
+    btn.title = T('gmail.activity_title');
+    btn.style.cssText =
+      'display:inline-flex;align-items:center;justify-content:center;'
+      + 'width:28px;height:28px;margin:0 2px;border-radius:50%;'
+      + 'cursor:pointer;vertical-align:middle;color:#5f6368;'
+      + 'transition:background .12s,color .12s;';
+    btn.innerHTML =
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+      + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + '<path d="M3 12h3.5l2-6 3.5 13 2.5-9 1.7 4H21"/></svg>';
+    btn.addEventListener('mouseenter', () => { if (!open) btn.style.background = 'rgba(60,64,67,.08)'; });
+    btn.addEventListener('mouseleave', () => { if (!open) btn.style.background = 'transparent'; });
+
+    const panel = document.createElement('div');
+    panel.className = 'mt-activity-panel';
+    panel.style.cssText =
+      'display:none;margin:10px 0 4px;padding:12px 14px;border:1px solid #dadce0;'
+      + 'border-radius:10px;background:#fff;max-height:320px;overflow-y:auto;';
+
+    let open = false;
+    const toggle = async (ev) => {
+      ev?.preventDefault();
+      ev?.stopPropagation();
+      open = !open;
+      btn.style.color = open ? '#0b8457' : '#5f6368';
+      btn.style.background = open ? 'rgba(11,132,87,.12)' : 'transparent';
+      if (!open) { panel.style.display = 'none'; return; }
+
+      panel.style.display = 'block';
+      panel.textContent = T('common.loading');
+      const anchor = document.querySelector('[role="main"] .nH.if') || host.closest('.nH') || host.parentElement;
+      if (anchor && !anchor.contains(panel)) anchor.insertBefore(panel, anchor.firstChild);
+      try {
+        const data = await Promise.all(findPixelIdsInThread().map(fetchStats));
+        renderActivityPanel(panel, data);
+      } catch (e) {
+        panel.textContent = T('gmail.load_failed', { e: e.message });
+      }
+    };
+    btn.addEventListener('click', toggle, true);
+    btn.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') toggle(ev);
+    }, true);
+
+    if (starCell) {
+      const cell = document.createElement('td');
+      cell.style.cssText = 'padding:0;vertical-align:middle;width:32px;';
+      cell.appendChild(btn);
+      host.insertBefore(cell, starCell);
+    } else {
+      host.insertBefore(btn, star);
+    }
+  }
+
   // 상태 전용 열. 이름 뒤에 붙이면 이름 길이에 따라 위치가 흔들려 세로 스캔이 안 된다.
   // 발신자 칸(td.yX) 바로 앞에 고정폭 칸을 만든다.
   // ★추적이 없는 행에도 빈 칸을 넣어야 열이 어긋나지 않는다.
@@ -599,8 +788,20 @@
   }
 
   // Add read indicators to sent emails in inbox view
+  // 추적은 '내가 보낸 메일'에 대한 것이므로 보낸편지함에서만 의미가 있다.
+  // 다른 화면에서는 열을 만들지 않고, 이미 만든 것이 있으면 걷어낸다.
+  function isSentView() {
+    return (location.hash || '').replace('#', '').split('/')[0].toLowerCase() === 'sent';
+  }
+
+  function removeAllIndicators() {
+    document.querySelectorAll('.mail-tracker-status').forEach((el) => el.remove());
+    document.querySelectorAll('td.mail-tracker-cell').forEach((el) => el.remove());
+  }
+
   async function addInboxReadIndicators() {
     if (!serverUrl || !dashboardPassword) return;
+    if (!isSentView()) { removeAllIndicators(); return; }
     
     console.log(LOG, 'addInboxReadIndicators called');
     
@@ -662,11 +863,11 @@
           day: 'numeric'
         }) : 'never';
         
-        statusEl.dataset.tip = `Activity recorded\nLast signal: ${lastOpen}`;
+        statusEl.dataset.tip = T('gmail.activity_recorded') + '\n' + T('gmail.last_signal', { t: lastOpen });
       } else {
         statusEl.textContent = '\u25cf'; // 회색 채운 점 = 발송됨, 아직 활동 없음
         statusEl.style.color = '#71717a';
-        statusEl.dataset.tip = 'Sent — no activity recorded yet';
+        statusEl.dataset.tip = T('gmail.sent_no_activity');
       }
       
       // 전용 열에 넣는다 (이름 우측이 아니라)

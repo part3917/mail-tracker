@@ -1,4 +1,5 @@
-import { CORS_HEADERS, DEDUP_WINDOW_MS, json, isBot, isProxy, isTooFast, getUser, requireAuth, requireAuthCors, servePixel, html, dataKey, indexKey, readTracker } from './shared.js';
+import { isAdmin, randomToken, metaKey, CORS_HEADERS, DEDUP_WINDOW_MS, json, isBot, isProxy, isTooFast, getUser, requireAuth, requireAuthCors, servePixel, html, dataKey, indexKey, readTracker } from './shared.js';
+import { renderAdmin } from './views/admin.js';
 import { sendWebhookNotifications } from './notifications.js';
 import { renderDetail } from './views/detail.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -89,6 +90,52 @@ export default {
 
       console.log(`[self-view] batch: ${ids.length} trackers, ${totalReclassified} total reclassified`);
       return json({ ok: true, totalReclassified, results });
+    }
+
+
+    // ── 관리자: 토큰 발급·회수 ──────────────────────────
+    // 별도 비밀번호 없이, admin 플래그가 달린 토큰으로만 들어온다.
+    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+      const user = await getUser(request, env);
+      if (!user) return requireAuth();
+      if (!(await isAdmin(env, user))) return new Response('Not found', { status: 404 });
+
+      // 목록 페이지
+      if (url.pathname === '/admin' && request.method === 'GET') {
+        const list = await env.TRACKER.list({ prefix: 'u:' });
+        const metas = list.keys.filter((k) => k.name.endsWith(':__meta__'));
+        const users = await Promise.all(metas.map(async (k) => {
+          const token = k.name.slice(2, -':__meta__'.length);
+          let meta = {};
+          try { meta = JSON.parse((await env.TRACKER.get(k.name)) || '{}'); } catch (e) {}
+          return { token, name: meta.name || '', createdAt: meta.createdAt || null, admin: meta.admin === true };
+        }));
+        users.sort((a, b) => (b.admin ? 1 : 0) - (a.admin ? 1 : 0));
+        return html(renderAdmin(users));
+      }
+
+      // 발급
+      if (url.pathname === '/admin/users' && request.method === 'POST') {
+        let name = '';
+        try { name = ((await request.json()).name || '').toString().slice(0, 60); } catch (e) {}
+        if (!name.trim()) return json({ error: 'Name required' }, 400);
+        const token = randomToken();
+        await env.TRACKER.put(metaKey(token), JSON.stringify({
+          name: name.trim(), createdAt: new Date().toISOString(),
+        }));
+        return json({ token, name: name.trim() });
+      }
+
+      // 회수 — 등록만 지운다. 기록은 남는다.
+      if (url.pathname.startsWith('/admin/users/') && request.method === 'DELETE') {
+        const token = decodeURIComponent(url.pathname.slice('/admin/users/'.length));
+        if (!token) return json({ error: 'Missing token' }, 400);
+        if (token === user) return json({ error: 'Cannot revoke your own token' }, 400);
+        await env.TRACKER.delete(metaKey(token));
+        return json({ revoked: token });
+      }
+
+      return new Response('Not found', { status: 404 });
     }
 
     // GET /t/:id — track pixel open
@@ -269,20 +316,38 @@ export default {
       if (!user) return requireAuthCors();
 
       const prefix = `u:${user}:`;
-      const list = await env.TRACKER.list({ prefix });
-      const results = [];
-      for (const key of list.keys) {
-        const id = key.name.slice(prefix.length);
-        if (id === '__meta__') continue;
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 500);
+      const cursor = url.searchParams.get('cursor') || undefined;
+
+      const list = await env.TRACKER.list({ prefix, limit, cursor });
+      const ids = list.keys
+        .map((k) => k.name.slice(prefix.length))
+        .filter((id) => id !== '__meta__');
+
+      // ★순차로 읽으면 트래커 수만큼 왕복이 쌓인다. 병렬로 가져온다.
+      const rows = await Promise.all(ids.map(async (id) => {
         const { data } = await readTracker(env, id);
-        results.push({
+        return {
           id, opens: data?.opens || 0, skipped: data?.skipped || 0,
           recipient: data?.recipient || null, subject: data?.subject || '',
           bodyPreview: data?.bodyPreview || '', messageId: data?.messageId || '',
+          createdAt: data?.createdAt || null,
           lastOpen: data?.events?.length ? data.events[data.events.length - 1].time : null,
-        });
+        };
+      }));
+
+      // 최신 발송이 위로
+      rows.sort((a, b) => {
+        if (!a.createdAt) return 1;
+        if (!b.createdAt) return -1;
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+
+      // 커서가 있으면 봉투로 감싸 돌려준다. 없으면 종전대로 배열(구버전 확장 호환).
+      if (cursor || !list.list_complete) {
+        return json({ items: rows, cursor: list.cursor || null, done: list.list_complete });
       }
-      return json(results);
+      return json(rows);
     }
 
     // GET /d/:id — delete a tracking pixel

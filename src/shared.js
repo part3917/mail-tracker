@@ -79,6 +79,24 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
 
 // Basic 인증의 password 자리에 담긴 사용자 토큰을 검증해 반환한다.
 // 등록되지 않은 토큰이면 null → 호출부에서 401.
+// 관리자 여부는 사용자 등록 레코드의 admin 플래그로 판단한다.
+// 별도 비밀번호를 두면 관리할 비밀이 하나 더 늘 뿐이다.
+export async function isAdmin(env, token) {
+  if (!token) return false;
+  try {
+    const meta = JSON.parse((await env.TRACKER.get(metaKey(token))) || '{}');
+    return meta.admin === true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export function randomToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  return Array.from(bytes, (b) => abc[b % abc.length]).join('');
+}
+
 export async function getUser(request, env) {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || !authHeader.startsWith('Basic ')) return null;

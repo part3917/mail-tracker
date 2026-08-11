@@ -1,4 +1,53 @@
 
+// ── i18n ────────────────────────────────────────────────
+const T = (k, v) => (window.MTI18N ? window.MTI18N.t(k, v) : k);
+
+function applyI18n(root) {
+  const scope = root || document;
+  scope.querySelectorAll('[data-i18n]').forEach((el) => {
+    const key = el.getAttribute('data-i18n');
+    const s = T(key);
+    if (!s || s === key) return;
+    // ★textContent 로 덮으면 자식 요소가 사라진다 (탭 안의 개수 span 등).
+    //   자식이 있으면 첫 텍스트 노드만 갈아끼운다.
+    if (el.children.length) {
+      const textNode = Array.from(el.childNodes).find((n) => n.nodeType === 3);
+      if (textNode) textNode.nodeValue = s;
+      else el.insertBefore(document.createTextNode(s), el.firstChild);
+    } else {
+      el.textContent = s;
+    }
+  });
+  scope.querySelectorAll('[data-i18n-ph]').forEach((el) => {
+    const s = T(el.getAttribute('data-i18n-ph'));
+    if (s) el.placeholder = s;
+  });
+  document.querySelectorAll('.lang-opt').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.lang === (window.MTI18N ? window.MTI18N.getLang() : 'en')));
+  });
+}
+
+function initLanguage() {
+  if (!window.MTI18N) return;
+  window.MTI18N.init(() => {
+    applyI18n();
+    document.querySelectorAll('.lang-opt').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const next = btn.dataset.lang;
+        window.MTI18N.setLang(next);
+        await chrome.storage.sync.set({ lang: next });
+        applyI18n();
+        // 이미 그려진 목록·상세도 새 언어로 다시 그린다
+        try { if (currentPixelId) showDetail(currentPixelId); else loadPixels(); } catch (e) {}
+        const note = document.getElementById('lang-note');
+        // Gmail 안 표시는 콘텐츠 스크립트가 그리므로 그쪽은 새로고침해야 따라온다
+        if (note) note.style.display = 'block';
+      });
+    });
+  });
+}
+
+
 // ── Theme ────────────────────────────────────────────────
 // 저장값이 없으면 OS 설정을 따른다. 선택하면 그때부터 그 선택이 이긴다.
 function applyTheme(mode) {
@@ -73,6 +122,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('delete-btn').addEventListener('click', deleteCurrentPixel);
 
   initTheme();
+  initLanguage();
 
   // Auto-track 전역 토글 — gmail.js 가 storage.onChanged 로 즉시 반영한다
   const autoTrackInput = document.getElementById('autotrack-input');
@@ -83,8 +133,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     autoTrackInput.addEventListener('change', async () => {
       await chrome.storage.sync.set({ autoTrack: autoTrackInput.checked });
       showToast(autoTrackInput.checked
-        ? 'New emails will be tracked by default'
-        : 'New emails will not be tracked unless you turn it on');
+        ? T('settings.track_on')
+        : T('settings.track_off'));
     });
   }
 
@@ -97,8 +147,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     notifyInput.addEventListener('change', async () => {
       await chrome.storage.sync.set({ notifyOnOpen: notifyInput.checked });
       showToast(notifyInput.checked
-        ? 'Notifications on'
-        : 'Notifications off');
+        ? T('settings.notify_on')
+        : T('settings.notify_off'));
     });
   }
 
@@ -144,6 +194,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('snippet-url').addEventListener('click', () => {
     copyToClipboard(document.getElementById('snippet-url').dataset.value);
+  });
+
+  document.querySelectorAll('.event-tab').forEach(tab => {
+    tab.addEventListener('click', () => selectEventTab(tab.dataset.tab));
   });
 });
 
@@ -214,17 +268,105 @@ function showList() {
   loadPixels();
 }
 
+// 탭은 한 번만 배선한다. 예전에는 showDetail 마다 리스너를 더해 쌓였다.
+function selectEventTab(name) {
+  document.querySelectorAll('.event-tab').forEach(t => {
+    const on = t.dataset.tab === name;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const isFiltered = name === 'filtered';
+  const recentEl = document.getElementById('events-list');
+  const filteredEl = document.getElementById('filtered-list');
+  if (recentEl) recentEl.style.display = isFiltered ? 'none' : 'block';
+  if (filteredEl) filteredEl.style.display = isFiltered ? 'block' : 'none';
+}
+
+function setCopyRow(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.dataset.value = value;
+  const slot = el.querySelector('.copy-row-value');
+  if (slot) slot.textContent = value;
+  el.title = value;
+}
+
+// 확장 캡처 이전 레코드는 프록시 경유 여부가 아예 없다.
+// 없는 것을 'direct' 로 읽으면 우리가 갖지 않은 확신을 주장하게 된다.
+function provenanceOf(e) {
+  if (!e) return 'unknown';
+  if (e.viaProxy === true || e.confidence === 'proxy') return 'proxy';
+  if (e.viaProxy === false || e.confidence === 'direct') return 'direct';
+  return 'unknown';
+}
+
+// 판정과 그 한계는 한 블록 안에서만 쓴다. 상태만 떼어 읽히는 일이 없게.
+function renderReading(data) {
+  const box = document.getElementById('detail-reading');
+  const stateEl = document.getElementById('detail-state');
+  const whenEl = document.getElementById('detail-when');
+  const noteEl = document.getElementById('detail-note');
+  if (!box || !stateEl || !whenEl || !noteEl) return;
+
+  if (!data) {
+    box.classList.remove('is-active');
+    stateEl.textContent = 'Reading the log…';
+    whenEl.textContent = '';
+    noteEl.textContent = '';
+    return;
+  }
+
+  const events = Array.isArray(data.events) ? data.events : [];
+  box.classList.toggle('is-active', events.length > 0);
+
+  if (events.length === 0) {
+    stateEl.textContent = 'No requests yet';
+    whenEl.textContent = data.createdAt ? `sent ${timeAgo(data.createdAt)}` : '';
+    noteEl.textContent = 'Nothing has asked for the pixel. That is not evidence the email went unread — most mail clients block remote images until the reader allows them.';
+    return;
+  }
+
+  stateEl.textContent = 'Requests recorded';
+  const last = events[events.length - 1];
+  whenEl.textContent = last && last.time ? `last ${timeAgo(last.time)}` : '';
+
+  const proxied = events.filter(e => provenanceOf(e) === 'proxy').length;
+  const direct = events.filter(e => provenanceOf(e) === 'direct').length;
+
+  if (proxied && direct) {
+    noteEl.textContent = 'Some requests loaded straight from a mail client; the rest came through a proxy, which reports itself instead of the reader.';
+  } else if (proxied) {
+    noteEl.textContent = proxied === events.length
+      ? 'Every request came through a mail proxy, so the place and device below describe the proxy — not the reader.'
+      : 'Every request whose origin was recorded came through a mail proxy, so the place and device below describe the proxy — not the reader.';
+  } else if (direct) {
+    noteEl.textContent = direct === events.length
+      ? 'Every request loaded straight from a mail client. Read the log below and judge for yourself.'
+      : 'Every request whose origin was recorded loaded straight from a mail client. Read the log below and judge for yourself.';
+  } else {
+    noteEl.textContent = 'These records predate origin tracking, so there is no telling which of them came through a mail proxy.';
+  }
+}
+
 async function showDetail(id) {
   currentPixelId = id;
   listView.style.display = 'none';
+  setupView.style.display = 'none';
   detailView.classList.add('active');
+  window.scrollTo(0, 0);
 
-  document.getElementById('detail-id').textContent = id;
-  document.getElementById('detail-recipient').textContent = '';
-  document.getElementById('detail-opens').textContent = '...';
-  document.getElementById('detail-last').textContent = '...';
+  const subjectEl = document.getElementById('detail-subject');
+  subjectEl.textContent = id;
+  subjectEl.classList.remove('untitled');
+  subjectEl.title = '';
+  document.getElementById('detail-meta').textContent = id;
+  document.getElementById('filtered-count').textContent = '';
+  renderReading(null);
+  selectEventTab('recent');
 
   const eventsListEl = document.getElementById('events-list');
+  const filteredListEl = document.getElementById('filtered-list');
+  filteredListEl.textContent = '';
   eventsListEl.textContent = '';
   const loadingDiv = document.createElement('div');
   loadingDiv.className = 'loading';
@@ -235,71 +377,59 @@ async function showDetail(id) {
 
   const pixelUrl = `${serverUrl}/t/${id}`;
   const htmlSnippet = `<img src="${pixelUrl}" width="1" height="1" style="display:none" />`;
-
-  const snippetHtml = document.getElementById('snippet-html');
-  const snippetUrl = document.getElementById('snippet-url');
-  snippetHtml.dataset.value = htmlSnippet;
-  snippetHtml.textContent = htmlSnippet;
-  snippetUrl.dataset.value = pixelUrl;
-  snippetUrl.textContent = pixelUrl;
+  setCopyRow('snippet-html', htmlSnippet);
+  setCopyRow('snippet-url', pixelUrl);
 
   try {
     const data = await api(`/s/${id}`);
-    document.getElementById('detail-recipient').textContent =
-      data.recipient ? `To: ${data.recipient}` : '';
-    // 횟수 대신 상태만. 숫자는 프록시 재요청으로 부풀려져 사실이 아니다.
-    const openEl = document.getElementById('detail-opens');
-    const hasActivity = (data.opens || 0) > 0;
-    openEl.textContent = hasActivity ? 'Opened' : 'No activity';
-    openEl.style.color = hasActivity ? 'var(--signal)' : 'var(--ink-3)';
 
-    document.getElementById('detail-skipped').textContent = data.skipped || 0;
-    document.getElementById('detail-protection').textContent =
-      data.hasSenderProtection ? 'Active' : 'Off';
-    document.getElementById('detail-last').textContent = data.events.length
-      ? timeAgo(data.events[data.events.length - 1].time)
-      : 'Never';
-
-    // 한계 고지 — 프록시 경유 건이 있으면 숫자·귀속을 믿을 수 없다고 알린다
-    const caveatEl = document.getElementById('detail-caveat');
-    if (caveatEl) {
-      const proxyCount = (data.events || []).filter(e => e.viaProxy || e.confidence === 'proxy').length;
-      if (proxyCount > 0) {
-        caveatEl.style.display = 'block';
-        caveatEl.textContent =
-          'Some or all of this activity came through a mail provider\u2019s image proxy. '
-          + 'One open can fire it several times, and if the email had more than one recipient '
-          + 'it cannot be tied to a specific person. Read the events below and judge for yourself.';
-      } else {
-        caveatEl.style.display = 'none';
-      }
+    // 사람이 알아보는 건 제목이다. 목록 화면과 같은 규칙을 쓴다.
+    const subject = (data.subject || '').trim();
+    if (subject) {
+      subjectEl.textContent = subject;
+      subjectEl.title = subject;
+    } else {
+      subjectEl.textContent = 'No subject';
+      subjectEl.classList.add('untitled');
     }
+
+    // 식별자·수신자·발송 시각·발신 IP 보호 — 전부 기계 데이터라 한 줄 로그로 눕힌다.
+    const metaEl = document.getElementById('detail-meta');
+    metaEl.textContent = '';
+    const metaLines = [
+      [id, data.recipient ? `to ${data.recipient}` : null],
+      [
+        data.createdAt ? `sent ${timeAgo(data.createdAt)}` : null,
+        data.hasSenderProtection ? 'your own IP filtered' : 'sender IP not recorded',
+      ],
+    ];
+    metaLines.forEach(parts => {
+      const kept = parts.filter(Boolean);
+      if (!kept.length) return;
+      const line = document.createElement('div');
+      line.textContent = kept.join('  ·  ');
+      metaEl.appendChild(line);
+    });
+
+    renderReading(data);
 
     const recentEvents = (data.events || []).slice().reverse().slice(0, 20);
     const filteredEvents = (data.filteredEvents || []).slice().reverse().slice(0, 20);
-    const filteredListEl = document.getElementById('filtered-list');
+
+    document.getElementById('filtered-count').textContent =
+      filteredEvents.length ? String(filteredEvents.length) : '';
 
     eventsListEl.textContent = '';
     filteredListEl.textContent = '';
-
     renderEventList(eventsListEl, recentEvents, false);
     renderEventList(filteredListEl, filteredEvents, true);
-
-    // Tab switching
-    document.querySelectorAll('.event-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.event-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        const isFiltered = tab.dataset.tab === 'filtered';
-        eventsListEl.style.display = isFiltered ? 'none' : 'block';
-        filteredListEl.style.display = isFiltered ? 'block' : 'none';
-      });
-    });
   } catch (err) {
+    renderReading(null);
+    document.getElementById('detail-state').textContent = 'Could not load the log';
     eventsListEl.textContent = '';
     const errDiv = document.createElement('div');
-    errDiv.style.color = '#ef4444';
-    errDiv.textContent = `Failed to load: ${err.message}`;
+    errDiv.className = 'detail-error';
+    errDiv.textContent = `${err.message}. Check the server URL in Settings, then reopen this tracker.`;
     eventsListEl.appendChild(errDiv);
   }
 }
@@ -316,7 +446,9 @@ async function loadPixels() {
   pixelContainer.appendChild(loadingDiv);
 
   try {
-    const pixels = await api('/list');
+    // 서버가 페이지네이션 봉투로 줄 수도, 배열로 줄 수도 있다
+    const raw = await api('/list');
+    const pixels = Array.isArray(raw) ? raw : (raw.items || []);
     pixelContainer.textContent = '';
 
     if (pixels.length === 0) {
@@ -358,7 +490,7 @@ async function loadPixels() {
       opens.style.paddingTop = p.opens > 0 ? '1px' : '4px';
       opens.style.opacity = p.opens > 0 ? '1' : '.55';
       opens.textContent = p.opens > 0 ? '\u2713' : '\u00b7';
-      opens.title = p.opens > 0 ? 'Activity recorded — open for details' : 'No activity yet';
+      opens.title = T(p.opens > 0 ? 'list.activity_yes' : 'list.activity_no');
 
       const info = document.createElement('div');
       info.className = 'pixel-info';
@@ -370,7 +502,7 @@ async function loadPixels() {
         subjectDiv.textContent = p.subject.trim();
       } else {
         subjectDiv.classList.add('untitled');
-        subjectDiv.textContent = 'No subject';
+        subjectDiv.textContent = T('list.no_subject');
       }
       subjectDiv.title = p.subject || '';
       info.appendChild(subjectDiv);
@@ -379,8 +511,9 @@ async function loadPixels() {
       meta.className = 'pixel-meta';
       const metaParts = [];
       if (p.recipient) metaParts.push(p.recipient);
-      metaParts.push(p.lastOpen ? `last activity ${timeAgo(p.lastOpen)}` : 'no activity yet');
-      meta.textContent = metaParts.join('  ·  ');
+      metaParts.push(p.createdAt ? T('list.sent_ago', { t: timeAgo(p.createdAt) }) : null);
+      metaParts.push(p.lastOpen ? T('list.opened_ago', { t: timeAgo(p.lastOpen) }) : T('list.no_activity'));
+      meta.textContent = metaParts.filter(Boolean).join('  ·  ');
       meta.title = p.id;
       info.appendChild(meta);
 
@@ -543,67 +676,140 @@ function reasonLabel(reason) {
   }
 }
 
+function absoluteTime(t) {
+  if (!t) return null;
+  const d = new Date(t);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleString();
+}
+
+// 없는 필드는 아예 행을 만들지 않는다. undefined 나 빈 구분자를 찍지 않기 위해.
+function addField(dl, label, value) {
+  if (value === undefined || value === null) return;
+  const text = String(value).trim();
+  if (!text) return;
+  const dt = document.createElement('dt');
+  dt.textContent = label;
+  const dd = document.createElement('dd');
+  dd.textContent = text;
+  dl.appendChild(dt);
+  dl.appendChild(dd);
+}
+
+function joinParts(parts) {
+  const kept = parts.filter(v => v !== undefined && v !== null && String(v).trim() !== '');
+  return kept.length ? kept.join(' · ') : null;
+}
+
+// 한 건의 증거. 요약 = 언제 / 얼마나 믿을 수 있나 / 대략 어디.
+// 펼치면 = 남아 있는 원시 필드 전부.
+function buildEventRow(e, isFiltered) {
+  const origin = provenanceOf(e);
+  const abs = absoluteTime(e.time);
+
+  const dot = document.createElement('span');
+  dot.className = 'ev-dot';
+  if (!isFiltered && origin !== 'unknown') dot.classList.add('is-' + origin);
+
+  const head = document.createElement('div');
+  head.className = 'ev-head';
+
+  const time = document.createElement('span');
+  time.className = 'ev-time';
+  time.textContent = e.time ? timeAgo(e.time) : 'time not recorded';
+  if (abs) time.title = abs;
+  head.appendChild(time);
+
+  const badge = document.createElement('span');
+  badge.className = 'ev-badge';
+  if (isFiltered) {
+    badge.textContent = reasonLabel(e.reason);
+    badge.title = 'This request was recorded but kept out of the log above.';
+  } else if (origin === 'proxy') {
+    badge.classList.add('is-proxy');
+    badge.textContent = 'via proxy';
+    badge.title = 'Fetched by the mail provider. One open can fire this several times, and it cannot be tied to one recipient.';
+  } else if (origin === 'direct') {
+    badge.classList.add('is-direct');
+    badge.textContent = 'direct';
+    badge.title = 'Loaded straight by the mail client.';
+  } else {
+    badge.textContent = 'origin unknown';
+    badge.title = 'This record predates origin tracking, so there is no telling whether it came through a proxy.';
+  }
+  head.appendChild(badge);
+
+  const lines = [];
+  const place = joinParts([e.city, e.region, e.country]);
+  const primary = place || e.ip || null;
+  if (primary) {
+    const l = document.createElement('div');
+    l.className = 'ev-line';
+    l.textContent = primary;
+    lines.push(l);
+  }
+  const secondary = joinParts([
+    e.asOrganization,
+    e.userAgent ? describeClient(e.userAgent) : null,
+  ]);
+  if (secondary) {
+    const l = document.createElement('div');
+    l.className = 'ev-line dim';
+    l.textContent = secondary;
+    lines.push(l);
+  }
+
+  const dl = document.createElement('dl');
+  dl.className = 'ev-kv';
+  addField(dl, 'Time', abs);
+  addField(dl, 'IP', e.ip);
+  addField(dl, 'Place', joinParts([e.city, e.region, e.postalCode, e.country, e.continent]));
+  if (e.latitude !== undefined && e.latitude !== null && e.latitude !== ''
+      && e.longitude !== undefined && e.longitude !== null && e.longitude !== '') {
+    addField(dl, 'Coordinates', `${e.latitude}, ${e.longitude}`);
+  }
+  addField(dl, 'Timezone', e.timezone);
+  addField(dl, 'Network', joinParts([e.asn ? `AS${e.asn}` : null, e.asOrganization]));
+  addField(dl, 'Edge', e.colo);
+  addField(dl, 'Transport', joinParts([e.httpProtocol, e.tlsVersion]));
+  if (isFiltered) addField(dl, 'Kept out as', reasonLabel(e.reason));
+  addField(dl, 'User agent', e.userAgent);
+
+  // 펼칠 내용이 없으면 disclosure 를 만들지 않는다. 빈 서랍은 만들지 않는다.
+  if (!dl.children.length) {
+    const row = document.createElement('div');
+    row.className = 'ev';
+    row.appendChild(dot);
+    row.appendChild(head);
+    lines.forEach(l => row.appendChild(l));
+    return row;
+  }
+
+  const row = document.createElement('details');
+  row.className = 'ev';
+  const summary = document.createElement('summary');
+  summary.appendChild(dot);
+  summary.appendChild(head);
+  lines.forEach(l => summary.appendChild(l));
+  const more = document.createElement('span');
+  more.className = 'ev-more';
+  more.textContent = 'Full record';
+  summary.appendChild(more);
+  row.appendChild(summary);
+  row.appendChild(dl);
+  return row;
+}
+
 function renderEventList(container, events, isFiltered) {
-  if (events.length === 0) {
+  const list = Array.isArray(events) ? events : [];
+  if (list.length === 0) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'color:#444;font-size:12px;';
-    empty.textContent = isFiltered ? 'Nothing filtered out' : 'No activity recorded yet';
+    empty.className = 'ev-empty';
+    empty.textContent = isFiltered
+      ? 'Nothing was kept out. Every request the pixel received is in Recorded.'
+      : 'No requests recorded yet.';
     container.appendChild(empty);
     return;
   }
-  events.forEach(e => {
-    const item = document.createElement('div');
-    item.className = 'event-item';
-
-    const timeDiv = document.createElement('div');
-    timeDiv.className = 'event-time';
-    timeDiv.textContent = timeAgo(e.time);
-
-    if (isFiltered) {
-      const label = document.createElement('span');
-      const isSelf = e.reason === 'self_view' || e.reason === 'sender_ip';
-      label.style.cssText = isSelf
-        ? 'color:#fb923c;font-size:10px;margin-left:6px;'
-        : 'color:#ef4444;font-size:10px;margin-left:6px;';
-      label.textContent = reasonLabel(e.reason);
-      timeDiv.appendChild(label);
-    }
-
-    const detailDiv = document.createElement('div');
-    detailDiv.className = 'event-detail';
-    detailDiv.title = e.userAgent || '';
-    // 있는 정보를 최대한 보여준다. 프록시 경유면 이 값들은 프록시 것이라
-    // 위의 배지와 함께 읽어야 한다.
-    const place = [e.city, e.region, e.country].filter(Boolean).join(', ') || (e.country || '?');
-    const line1 = `${place} · ${e.ip || '?'} · ${describeClient(e.userAgent)}`;
-    const extras = [];
-    if (e.asOrganization) extras.push(e.asOrganization);
-    if (e.timezone) extras.push(e.timezone);
-    detailDiv.textContent = line1;
-    if (extras.length) {
-      const sub = document.createElement('div');
-      sub.style.cssText = 'color:var(--ink-3);opacity:.7;font-family:var(--mono);font-size:10px;margin-top:2px;';
-      sub.textContent = extras.join('  ·  ');
-      detailDiv.appendChild(sub);
-    }
-
-    // 프록시 경유인지 직접 접속인지를 눈에 보이게. 판단은 사용자가 한다.
-    if (!isFiltered) {
-      const badge = document.createElement('span');
-      const viaProxy = e.viaProxy || e.confidence === 'proxy';
-      badge.style.cssText = 'margin-left:6px;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:600;letter-spacing:.03em;'
-        + (viaProxy
-          ? 'color:var(--caution);background:var(--caution-bg);'
-          : 'color:var(--signal);background:var(--signal-bg);');
-      badge.textContent = viaProxy ? 'via proxy' : 'direct';
-      badge.title = viaProxy
-        ? 'Fetched through the mail provider. A single open can fire this several times, and it cannot be tied to one recipient.'
-        : 'Loaded directly by the mail client.';
-      timeDiv.appendChild(badge);
-    }
-
-    item.appendChild(timeDiv);
-    item.appendChild(detailDiv);
-    container.appendChild(item);
-  });
+  list.forEach(e => container.appendChild(buildEventRow(e || {}, isFiltered)));
 }

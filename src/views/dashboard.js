@@ -1,4 +1,5 @@
 import { FAVICON, LOGO_SVG } from '../shared.js';
+import { THEME_LIGHT_CSS, THEME_BUTTON_HTML, THEME_SCRIPT } from './theme.js';
 
 export function renderDashboard(results, totalOpens, activeCount) {
   return `<!DOCTYPE html>
@@ -19,10 +20,10 @@ export function renderDashboard(results, totalOpens, activeCount) {
     --radius: 12px; --radius-sm: 8px;
   }
   body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-  .top-bar { position: sticky; top: 0; z-index: 50; background: rgba(9,9,11,0.8); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; }
+  .top-bar { position: sticky; top: 0; z-index: 50; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; padding-right: 76px; }
   .top-bar .brand { font-weight: 700; font-size: 0.95rem; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
   .new-btn { padding: 7px 16px; border-radius: 8px; border: none; background: var(--accent); color: white; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 6px; }
-  .new-btn:hover { background: #818cf8; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
+  .new-btn:hover { background: color-mix(in srgb, var(--accent) 82%, white); transform: translateY(-1px); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 32%, transparent); }
   .container { max-width: 960px; margin: 0 auto; padding: 28px 24px 64px; }
   .summary { display: flex; gap: 24px; margin-bottom: 28px; flex-wrap: wrap; }
   .summary-item { display: flex; align-items: baseline; gap: 8px; }
@@ -33,7 +34,7 @@ export function renderDashboard(results, totalOpens, activeCount) {
   .search-bar::placeholder { color: var(--text-3); } .search-bar:focus { border-color: var(--accent); }
   .card-list { display: flex; flex-direction: column; gap: 8px; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; text-decoration: none; color: inherit; transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s; cursor: pointer; }
-  .card:hover { border-color: var(--border-hover); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+  .card:hover { border-color: var(--border-hover); transform: translateY(-1px); box-shadow: 0 4px 16px color-mix(in srgb, var(--text) 12%, transparent); }
   .card-left { min-width: 0; }
   .card-subject { font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card-meta { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -49,7 +50,7 @@ export function renderDashboard(results, totalOpens, activeCount) {
   .badge-opened { background: var(--green-dim); color: var(--green); } .badge-pending { background: var(--amber-dim); color: var(--amber); }
   .empty-state { text-align: center; padding: 64px 20px; color: var(--text-3); }
   .empty-state p { font-size: 0.95rem; margin-bottom: 8px; } .empty-state .sub { font-size: 0.8rem; }
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+  .modal-overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: blur(4px); z-index: 100; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
   .modal-overlay.open { opacity: 1; pointer-events: auto; }
   .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; width: 90%; max-width: 440px; transform: translateY(8px); transition: transform 0.2s; }
   .modal-overlay.open .modal { transform: translateY(0); }
@@ -61,11 +62,12 @@ export function renderDashboard(results, totalOpens, activeCount) {
   .btn-cancel { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text-2); font-size: 0.8rem; cursor: pointer; transition: all 0.15s; }
   .btn-cancel:hover { border-color: var(--border-hover); color: var(--text); }
   .btn-create { padding: 8px 20px; border-radius: 8px; border: none; background: var(--accent); color: white; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
-  .btn-create:hover { background: #818cf8; }
+  .btn-create:hover { background: color-mix(in srgb, var(--accent) 82%, white); }
   .result-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-top: 16px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; color: var(--text-2); word-break: break-all; user-select: all; }
   .result-label { font-size: 0.7rem; color: var(--text-3); margin-bottom: 4px; font-family: 'Inter', system-ui; }
+${THEME_LIGHT_CSS}
 </style></head>
-<body>
+<body>${THEME_BUTTON_HTML}
   <div class="top-bar">
     <div class="brand">${LOGO_SVG} Mail Tracker</div>
     <button class="new-btn" id="newBtn">+ New Tracker</button>
@@ -162,5 +164,5 @@ export function renderDashboard(results, totalOpens, activeCount) {
     });
     document.getElementById('copyHtmlBtn').addEventListener('click', function() { navigator.clipboard.writeText(createdPixelHtml).then(function() { var btn = document.getElementById('copyHtmlBtn'); btn.textContent = 'Copied!'; setTimeout(function() { btn.textContent = 'Copy Pixel HTML'; }, 1500); }); });
   </script>
-</body></html>`;
+${THEME_SCRIPT}</body></html>`;
 }
