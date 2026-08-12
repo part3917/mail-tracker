@@ -1,4 +1,4 @@
-import { isAdmin, randomToken, metaKey, CORS_HEADERS, DEDUP_WINDOW_MS, json, isBot, isProxy, isTooFast, getUser, requireAuth, requireAuthCors, servePixel, html, dataKey, indexKey, readTracker } from './shared.js';
+import { isAdmin, randomToken, metaKey, isCloudNetwork, CORS_HEADERS, DEDUP_WINDOW_MS, json, isBot, isProxy, isTooFast, getUser, requireAuth, requireAuthCors, servePixel, html, dataKey, indexKey, readTracker } from './shared.js';
 import { renderAdmin } from './views/admin.js';
 import { sendWebhookNotifications } from './notifications.js';
 import { renderDetail } from './views/detail.js';
@@ -194,19 +194,15 @@ export default {
       }
 
       // Filter 2b: 발송 후 10초 이내 = Apple MPP 등 기계 프리페치
+      // ★발송 직후 요청을 '버리지' 않는다 — 알림 보고 즉시 여는 사람이 실재한다.
+      //   대신 발송 후 몇 초 만에 왔는지를 이벤트에 적어 사용자가 판단하게 한다.
       const sentAtMs = existing.sentAt ? new Date(existing.sentAt).getTime() : null;
-      if (isTooFast(sentAtMs, nowMs)) {
-        existing.skipped = (existing.skipped || 0) + 1;
-        existing.filteredEvents = existing.filteredEvents || [];
-        existing.filteredEvents.push({ time: now, ip, userAgent, reason: 'prefetch_too_fast' });
-        if (existing.filteredEvents.length > 20) existing.filteredEvents = existing.filteredEvents.slice(-20);
-        await env.TRACKER.put(trackerKey, JSON.stringify(existing));
-        console.log(`[open] id=${id} SKIPPED reason=prefetch_too_fast (${nowMs - sentAtMs}ms)`);
-        return servePixel();
-      }
+      const sinceSentMs = sentAtMs ? (nowMs - sentAtMs) : null;
 
       // 프록시 경유 여부를 등급으로 기록 (제외하지 않음)
-      const viaProxy = isProxy(userAgent);
+      // ★User-Agent 는 위조·평범화되지만 IP 소유 조직은 위장하기 어렵다.
+      //   데이터센터에서 온 요청은 정의상 사람의 기기가 아니므로 direct 로 보지 않는다.
+      const viaProxy = isProxy(userAgent) || isCloudNetwork(cf.asOrganization);
 
       // Filter 3: Dedup window (same IP within 5s)
       const lastEvent = existing.events.length > 0 ? existing.events[existing.events.length - 1] : null;
@@ -223,6 +219,7 @@ export default {
       existing.events.push({
         time: now, ip, country, userAgent, viaProxy,
         confidence: viaProxy ? 'proxy' : 'direct',
+        sinceSentMs,
         ...geo,
       });
       if (existing.events.length > 100) existing.events = existing.events.slice(-100);
@@ -293,11 +290,15 @@ export default {
       if (recipient && !recipient.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) return json({ error: 'Invalid email format' }, 400);
       if (subject.length > 500 || bodyPreview.length > 1000) return json({ error: 'Input too long' }, 400);
 
+      const nowIso = new Date().toISOString();
       await env.TRACKER.put(dataKey(id), JSON.stringify({
         owner: user,
+        // 생성과 발송을 나눠 적는다. 지금은 같은 값이지만, 초안으로 두고
+        // 나중에 보내는 경우 확장이 /sent 로 실제 발송 시각을 갱신한다.
+        sentAt: nowIso,
         opens: 0, events: [], filteredEvents: [], skipped: 0,
         senderIp, recipient, subject, bodyPreview, messageId,
-        createdAt: new Date().toISOString(),
+        createdAt: nowIso,
       }));
       // 소유권 색인 — /list 는 이 접두어만 스캔하므로 타인 기록이 섞이지 않는다
       await env.TRACKER.put(indexKey(user, id), '');

@@ -320,13 +320,13 @@ function renderReading(data) {
   box.classList.toggle('is-active', events.length > 0);
 
   if (events.length === 0) {
-    stateEl.textContent = 'No requests yet';
+    stateEl.textContent = T('read.none');
     whenEl.textContent = data.createdAt ? `sent ${timeAgo(data.createdAt)}` : '';
     noteEl.textContent = 'Nothing has asked for the pixel. That is not evidence the email went unread — most mail clients block remote images until the reader allows them.';
     return;
   }
 
-  stateEl.textContent = 'Requests recorded';
+  stateEl.textContent = T('read.some');
   const last = events[events.length - 1];
   whenEl.textContent = last && last.time ? `last ${timeAgo(last.time)}` : '';
 
@@ -337,14 +337,14 @@ function renderReading(data) {
     noteEl.textContent = 'Some requests loaded straight from a mail client; the rest came through a proxy, which reports itself instead of the reader.';
   } else if (proxied) {
     noteEl.textContent = proxied === events.length
-      ? 'Every request came through a mail proxy, so the place and device below describe the proxy — not the reader.'
-      : 'Every request whose origin was recorded came through a mail proxy, so the place and device below describe the proxy — not the reader.';
+      ? T('read.all_proxy')
+      : T('read.known_proxy');
   } else if (direct) {
     noteEl.textContent = direct === events.length
-      ? 'Every request loaded straight from a mail client. Read the log below and judge for yourself.'
-      : 'Every request whose origin was recorded loaded straight from a mail client. Read the log below and judge for yourself.';
+      ? T('read.all_direct')
+      : T('read.known_direct');
   } else {
-    noteEl.textContent = 'These records predate origin tracking, so there is no telling which of them came through a mail proxy.';
+    noteEl.textContent = T('read.unknown');
   }
 }
 
@@ -397,10 +397,10 @@ async function showDetail(id) {
     const metaEl = document.getElementById('detail-meta');
     metaEl.textContent = '';
     const metaLines = [
-      [id, data.recipient ? `to ${data.recipient}` : null],
+      [id, data.recipient ? T('meta.to', { r: data.recipient }) : null],
       [
         data.createdAt ? `sent ${timeAgo(data.createdAt)}` : null,
-        data.hasSenderProtection ? 'your own IP filtered' : 'sender IP not recorded',
+        data.hasSenderProtection ? T('meta.ip_filtered') : T('meta.ip_not_recorded'),
       ],
     ];
     metaLines.forEach(parts => {
@@ -637,10 +637,10 @@ function timeAgo(dateStr) {
   const then = new Date(dateStr).getTime();
   const diff = Math.floor((now - then) / 1000);
 
-  if (diff < 60) return 'just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  if (diff < 60) return T('time.just_now');
+  if (diff < 3600) return T('time.m_ago', { n: Math.floor(diff / 60) });
+  if (diff < 86400) return T('time.h_ago', { n: Math.floor(diff / 3600) });
+  if (diff < 604800) return T('time.d_ago', { n: Math.floor(diff / 86400) });
   return new Date(dateStr).toLocaleDateString();
 }
 
@@ -716,15 +716,28 @@ function buildEventRow(e, isFiltered) {
 
   const time = document.createElement('span');
   time.className = 'ev-time';
-  time.textContent = e.time ? timeAgo(e.time) : 'time not recorded';
+  time.textContent = e.time ? timeAgo(e.time) : T('time.not_recorded');
   if (abs) time.title = abs;
   head.appendChild(time);
+
+  // 발송 후 얼마 만에 왔는지 — 버리지 않고 보여주기만 한다.
+  // 몇 초 만이면 기계일 가능성이 크지만, 알림 보고 바로 여는 사람도 있다.
+  if (typeof e.sinceSentMs === 'number' && e.sinceSentMs >= 0) {
+    const sec = Math.round(e.sinceSentMs / 1000);
+    const gap = document.createElement('span');
+    gap.className = 'ev-gap';
+    gap.style.cssText = 'margin-left:7px;font-size:10px;color:var(--ink-3);font-family:var(--mono);';
+    gap.textContent = sec < 90
+      ? T('ev.since_sent', { n: sec })
+      : T('ev.since_sent_m', { n: Math.round(sec / 60) });
+    head.appendChild(gap);
+  }
 
   const badge = document.createElement('span');
   badge.className = 'ev-badge';
   if (isFiltered) {
     badge.textContent = reasonLabel(e.reason);
-    badge.title = 'This request was recorded but kept out of the log above.';
+    badge.title = T('ev.kept_out');
   } else if (origin === 'proxy') {
     badge.classList.add('is-proxy');
     badge.textContent = 'via proxy';
@@ -734,7 +747,7 @@ function buildEventRow(e, isFiltered) {
     badge.textContent = 'direct';
     badge.title = 'Loaded straight by the mail client.';
   } else {
-    badge.textContent = 'origin unknown';
+    badge.textContent = T('ev.origin_unknown');
     badge.title = 'This record predates origin tracking, so there is no telling whether it came through a proxy.';
   }
   head.appendChild(badge);
@@ -806,8 +819,8 @@ function renderEventList(container, events, isFiltered) {
     const empty = document.createElement('div');
     empty.className = 'ev-empty';
     empty.textContent = isFiltered
-      ? 'Nothing was kept out. Every request the pixel received is in Recorded.'
-      : 'No requests recorded yet.';
+      ? T('ev.none_filtered')
+      : T('ev.none_recorded');
     container.appendChild(empty);
     return;
   }

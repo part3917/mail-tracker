@@ -60,6 +60,23 @@ export function isProxy(userAgent) {
 }
 
 // 발송 직후 10초 이내 = Apple MPP 등 기계 프리페치
+
+// ★자백하지 않는 프록시 판별.
+// UA 는 평범한 브라우저로 위장되지만, IP 를 소유한 조직명은 등록기관 값이라 위조하기 어렵다.
+// 데이터센터/클라우드 사업자에서 온 요청은 사람의 기기가 아니므로 direct 로 보지 않는다.
+// 근거 사례: 2026-08-12 Park Kiely 재발송 — 발송 23초 뒤 asOrganization="Microsoft Corporation",
+//            UA 는 평범한 Windows Chrome 이라 기존 패턴에 전혀 안 걸렸다 (MS365 수신 처리).
+export const CLOUD_ORG_PATTERNS = [
+  /microsoft/i, /google/i, /amazon|aws/i, /cloudflare/i, /oracle/i,
+  /digitalocean/i, /linode|akamai/i, /hetzner/i, /ovh/i, /alibaba/i,
+  /proofpoint/i, /mimecast/i, /barracuda/i, /fastly/i, /zscaler/i,
+];
+
+export function isCloudNetwork(asOrganization) {
+  if (!asOrganization) return false;
+  return CLOUD_ORG_PATTERNS.some((re) => re.test(asOrganization));
+}
+
 export function isTooFast(sentAtMs, nowMs) {
   if (!sentAtMs) return false;
   return (nowMs - sentAtMs) < MACHINE_WINDOW_MS;

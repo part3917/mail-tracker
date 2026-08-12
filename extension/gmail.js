@@ -623,10 +623,10 @@
     const d = new Date(iso);
     const diff = Date.now() - d.getTime();
     const m = Math.floor(diff / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return `${m}m ago`;
+    if (m < 1) return T('time.just_now');
+    if (m < 60) return T('time.m_ago', { n: m });
     const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
+    if (h < 24) return T('time.h_ago', { n: h });
     return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
